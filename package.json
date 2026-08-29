@@ -1,0 +1,15 @@
+{
+  "name": "destiny-beyond-h5",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "《天命之外》玄幻文字人生模拟 H5 游戏",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env.local server.mjs",
+    "package:taptap": "node scripts/build-taptap-package.mjs",
+    "test": "node --test --test-concurrency=1 tests/agnes-contract.test.mjs tests/game-client.test.mjs tests/game-data.test.mjs tests/game-engine.test.mjs tests/server.test.mjs tests/ui-shell.test.mjs tests/world-canon.test.mjs"
+  },
+  "engines": {
+    "node": ">=20.12"
+  }
+}

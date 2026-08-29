@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+    <meta name="theme-color" content="#FBF8F1">
+    <meta name="description" content="《天命之外》是一款由 Agnes 驱动的高自由玄幻文字修炼 H5 游戏。">
+    <meta name="destiny-api-mode" content="static">
+    <meta name="destiny-api-base" content="">
+    <title>天命之外</title>
+    <link rel="stylesheet" href="./public/styles.css?v=20260824-r8">
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+    <main id="main-content">
+      <section id="intro-screen" class="intro-screen" aria-labelledby="game-title">
+        <header class="intro-header">
+          <div class="brand-line"><span class="brand-seal" aria-hidden="true">命</span><span>天命之外</span></div>
+          <div class="intro-actions"><div id="intro-provider-status" class="provider-chip" data-state="checking"><i aria-hidden="true"></i><span>正在查验 Agnes</span></div><button id="open-agnes-settings-intro" class="text-button" type="button">Agnes 设置</button></div>
+        </header>
+
+        <div class="intro-layout">
+          <div class="intro-story">
+            <p class="eyebrow">天武大陆 · 高自由修炼模拟</p>
+            <h1 id="game-title">天命之外</h1>
+            <p>你不是既定故事的主角。一次选择只推进一个月，NPC 会继续生活，伤势、寿元、功德与业力都会留下后果。</p>
+          </div>
+
+          <section class="birth-ledger" aria-label="创建角色">
+            <button id="continue-game" class="continue-slip" type="button" hidden><small>已有命簿</small><strong id="continue-summary">继续前缘</strong></button>
+            <form id="character-form" novalidate>
+              <section id="creation-step-basic" class="creation-step" aria-labelledby="basic-title">
+                <div class="panel-title"><span>一</span><div><p>入世录名</p><h2 id="basic-title">基础信息与道途</h2></div></div>
+                <label class="field-row" for="character-name"><span>姓名</span><input id="character-name" name="name" type="text" maxlength="12" autocomplete="off" placeholder="例如：沈砚秋" required><small class="field-error" data-error-for="name"></small></label>
+                <div class="field-row age-field"><label for="character-age">年龄</label><div class="age-control"><output id="character-age-output" for="character-age">18 岁</output><input id="character-age" name="age" type="range" min="16" max="60" value="18" required></div></div>
+                <fieldset class="choice-fieldset"><legend>性别</legend><div class="segmented-options"><label><input type="radio" name="gender" value="男" checked><span>男</span></label><label><input type="radio" name="gender" value="女"><span>女</span></label><label><input type="radio" name="gender" value="不记"><span>不记</span></label><label><input type="radio" name="gender" value="自定义"><span>自定义</span></label></div></fieldset>
+                <label id="custom-gender-field" class="field-row custom-gender-field" for="custom-gender" hidden><span>自定义性别</span><input id="custom-gender" name="customGender" type="text" maxlength="20" autocomplete="off" placeholder="例如：雌雄同体的妖族"></label>
+                <div class="field-grid">
+                  <label><span>出生地</span><select id="birthplace" name="birthplace"></select></label>
+                  <label><span>出身</span><select id="background" name="background"></select></label>
+                  <label class="full-field"><span>此生道途</span><select id="path" name="path"><option>问道飞升</option><option>逍遥长生</option><option>快意恩仇</option><option>守护所爱</option><option>问鼎天下</option><option>随心所欲</option></select></label>
+                </div>
+                <button id="creation-next" class="primary-button" type="button">下一步：定根骨</button>
+              </section>
+
+              <section id="creation-step-build" class="creation-step" aria-labelledby="build-title" hidden>
+                <div class="panel-title"><span>二</span><div><p>根骨命盘</p><h2 id="build-title">灵根、体质与六维</h2></div></div>
+                <div class="field-grid">
+                  <label><span>灵根品级</span><select id="spirit-root-grade" name="spiritRootGrade"><option>天灵根</option><option selected>地灵根</option><option>真灵根</option><option>伪灵根</option><option>变异灵根</option></select></label>
+                  <label><span>主灵根</span><select id="root-primary-element" name="rootPrimaryElement"><option>金</option><option>木</option><option>水</option><option>火</option><option>土</option><option>雷</option><option>风</option><option>冰</option></select></label>
+                  <label><span>次灵根</span><select id="root-secondary-element" name="rootSecondaryElement"><option value="">无</option><option>金</option><option>木</option><option>水</option><option>火</option><option>土</option><option>雷</option><option>风</option><option>冰</option></select></label>
+                  <label><span>体质</span><select id="constitution" name="constitution"><option>凡体</option><option>玄阴之体</option><option>纯阳之体</option><option>先天道胎</option><option>百炼战骨</option></select></label>
+                  <label class="full-field"><span>先天天赋</span><select id="talent" name="talent"><option>天资聪颖</option><option>过目不忘</option><option>身轻如燕</option><option>天生道心</option><option>气运加身</option><option>神识过人</option><option>百脉俱通</option><option>钢筋铁骨</option></select></label>
+                </div>
+                <div class="stat-builder" aria-labelledby="stat-builder-title"><div class="stat-builder-heading"><strong id="stat-builder-title">六维分配</strong><span>剩余 <b id="stat-points-left">0</b> / 60</span></div><div class="stat-inputs">
+                  <label>资质<input name="aptitude" type="number" min="1" max="15" value="10"></label>
+                  <label>悟性<input name="insight" type="number" min="1" max="15" value="10"></label>
+                  <label>神识<input name="soul" type="number" min="1" max="15" value="10"></label>
+                  <label>遁速<input name="agility" type="number" min="1" max="15" value="10"></label>
+                  <label>道心<input name="martialHeart" type="number" min="1" max="15" value="10"></label>
+                  <label>仙缘<input name="fortune" type="number" min="1" max="15" value="10"></label>
+                </div><p id="stat-budget-error" class="field-error" role="alert"></p></div>
+                <div class="form-actions"><button id="creation-back" class="secondary-button" type="button">返回基础信息</button><button class="primary-button" type="submit">立命入世</button></div>
+              </section>
+            </form>
+          </section>
+        </div>
+      </section>
+
+      <section id="game-screen" class="game-screen" aria-label="天命之外命簿" hidden>
+        <header class="game-header">
+          <div class="brand-line compact"><span class="brand-seal" aria-hidden="true">命</span><span>天命之外</span></div>
+          <div class="time-mark"><span id="era-name">天衡纪</span><strong><span id="world-year">1127</span> 年 <span id="world-month">1</span> 月</strong></div>
+          <div class="header-actions"><button id="engine-toggle" class="text-button" type="button" aria-pressed="false">命簿引擎</button><div id="provider-status" class="provider-chip" data-state="offline"><i aria-hidden="true"></i><span>离线</span></div><button id="open-save-drawer" class="seal-button" type="button" aria-controls="save-drawer" aria-expanded="false">藏</button></div>
+        </header>
+
+        <div class="game-layout" data-mobile-panel="event">
+          <aside id="player-panel" class="paper-panel player-panel" aria-label="角色状态">
+            <div class="panel-title jade"><span id="soul-sigil">根</span><div><p>命主状态</p><h2 id="player-name">无名</h2></div></div>
+            <dl id="identity-list" class="identity-list"></dl>
+            <section class="resource-section" aria-label="资源状态">
+              <div><span>气血</span><progress id="vitality-bar" max="100" value="100"></progress><b id="vitality-value">100 / 100</b></div>
+              <div><span>灵力</span><progress id="spirit-bar" max="100" value="100"></progress><b id="spirit-value">100 / 100</b></div>
+              <div><span>修为</span><progress id="cultivation-bar" max="100" value="0"></progress><b><span id="cultivation-value">0</span> / <span id="cultivation-needed">100</span></b></div>
+            </section>
+            <dl id="stat-list" class="stat-list"></dl>
+            <section class="quiet-section"><h3>灵根与体质</h3><strong id="spirit-root-name">尚未测定</strong><p id="spirit-root-detail">命途未明。</p></section>
+            <section class="quiet-section"><h3>功法构筑</h3><div id="technique-build" class="system-summary"></div><ul id="technique-list" class="plain-list"></ul></section>
+            <section class="quiet-section"><h3>背包材料</h3><ul id="inventory-list" class="plain-list"></ul></section>
+            <section class="quiet-section"><h3>六艺</h3><div id="craft-list" class="system-summary"></div></section>
+            <section class="quiet-section"><h3>宗门</h3><p id="sect-state"></p><h3>洞府</h3><p id="cave-state"></p></section>
+            <section class="quiet-section"><h3>情缘与关系</h3><div id="relationship-list" class="npc-list"><p class="empty-copy">尚无情缘。</p></div></section>
+            <section class="quiet-section"><h3>事件人物</h3><div id="npc-list" class="npc-list"><p class="empty-copy">尚无一人真正记得你。</p></div></section>
+            <section class="quiet-section"><h3>NPC 生态</h3><div id="npc-ecology-list" class="npc-list"></div></section>
+          </aside>
+
+          <section id="event-panel" class="paper-panel event-panel" aria-live="polite">
+            <div class="event-heading"><div><p id="event-source" class="eyebrow">命簿推演</p><h2 id="event-title" tabindex="-1">等待命途显现</h2></div><span id="danger-mark" class="danger-mark" data-danger="low">平和</span></div>
+            <div class="gold-rule" aria-hidden="true"></div>
+            <p id="event-scene" class="event-scene">风吹过空白的命簿，尚未落下一字。</p>
+            <div id="event-loading" class="event-loading" hidden><i aria-hidden="true"></i><span>Agnes 正在续写这一月</span></div>
+            <pre id="streaming-preview" class="streaming-preview" aria-live="polite" hidden></pre>
+            <div id="provider-error" class="provider-error" role="alert" hidden><strong>Agnes 未能写下这一页</strong><p id="provider-error-message"></p><button id="offline-continue" class="secondary-button" type="button">改用命簿引擎继续</button></div>
+            <section id="system-panel" class="system-panel" aria-label="本地修炼系统" hidden><div id="system-panel-content" class="system-grid"></div><div id="combat-forecast" class="combat-forecast" hidden></div><div id="system-action-list" class="system-action-list"></div><button id="return-to-mainline" class="secondary-button return-mainline" type="button">返回当前主线</button></section>
+            <div id="choice-list" class="choice-list" aria-label="命途选择"></div>
+            <article id="resolution-view" class="choice-result resolution-view" aria-labelledby="resolution-title" hidden><header><p id="resolution-status" class="eyebrow">本地结算已定</p><h2 id="resolution-title">此月回响</h2></header><p id="result-copy" class="local-outcome"></p><p id="resolution-narrative" class="resolution-narrative"></p><dl class="resolution-details"><div><dt>NPC 反应</dt><dd id="resolution-npc-reaction"></dd></div><div><dt>实际后果</dt><dd id="resolution-consequence"></dd></div><div><dt>后续线索</dt><dd id="resolution-next-clue"></dd></div></dl><p id="resolution-error" class="resolution-error" role="alert" hidden></p><button id="next-event" class="primary-button" type="button">继续，进入下一月</button></article>
+            <form id="free-action-form" class="free-action-form"><label for="free-action-input">自由行动</label><div><input id="free-action-input" type="text" maxlength="120" autocomplete="off" placeholder="输入任何你想做的事"><button type="submit">执行</button></div></form>
+            <details id="command-drawer" class="command-drawer"><summary>更多操作</summary><nav id="command-menu" class="command-menu" aria-label="常驻命令"><button type="button" data-command="/状态">状态</button><button type="button" data-command="/修炼">修炼</button><button type="button" data-command="/突破">突破</button><button type="button" data-command="/背包">背包</button><button type="button" data-command="/功法">功法</button><button type="button" data-command="/技艺">技艺</button><button type="button" data-command="/宗门">宗门</button><button type="button" data-command="/洞府">洞府</button><button type="button" data-command="/坊市">坊市</button><button type="button" data-command="/情缘">情缘</button><button type="button" data-command="/生态">生态</button><button type="button" data-command="/帮助">帮助</button></nav></details>
+            <aside id="mobile-player-status" class="mobile-player-status" aria-label="当前玩家状态" hidden>
+              <header class="mobile-status-heading"><div><p class="eyebrow">此刻命盘</p><strong id="mobile-player-name">无名</strong></div><span id="mobile-player-realm" class="mobile-status-realm">凡人 · 初境</span></header>
+              <div class="mobile-status-meta"><span>所在地 <b id="mobile-player-location">天武大陆</b></span><span id="mobile-player-abnormal" class="mobile-status-condition" data-state="normal">无</span></div>
+              <div class="mobile-status-resources" aria-label="当前资源">
+                <div class="mobile-status-resource"><span><i>气血</i><b id="mobile-vitality-value">100 / 100</b></span><progress id="mobile-vitality-bar" max="100" value="100"></progress></div>
+                <div class="mobile-status-resource"><span><i>灵力</i><b id="mobile-spirit-value">100 / 100</b></span><progress id="mobile-spirit-bar" max="100" value="100"></progress></div>
+                <div class="mobile-status-resource"><span><i>修为</i><b><span id="mobile-cultivation-value">0</span> / <span id="mobile-cultivation-needed">100</span></b></span><progress id="mobile-cultivation-bar" max="100" value="0"></progress></div>
+              </div>
+            </aside>
+          </section>
+
+          <aside id="chronicle-panel" class="paper-panel chronicle-panel" aria-label="世界与年谱">
+            <div class="panel-title gold"><span>历</span><div><p>世界仍在行走</p><h2>生平年谱</h2></div></div>
+            <section class="world-state"><span>当世风声</span><p id="world-latest">北境灵潮初起。</p><div><small>乱世度</small><progress id="unrest-bar" max="100" value="22"></progress><b id="unrest-value">22</b></div></section>
+            <div class="chronicle-heading"><strong>本命记录</strong><span id="chronicle-count">1 笔</span></div><ol id="chronicle-list" class="chronicle-list"></ol>
+          </aside>
+        </div>
+
+        <nav id="mobile-nav" class="mobile-nav" aria-label="命簿分页"><button type="button" data-mobile-panel="player">命盘</button><button type="button" data-mobile-panel="event" class="active" aria-current="page">命途</button><button type="button" data-mobile-panel="chronicle">年谱</button></nav>
+      </section>
+    </main>
+
+    <aside id="save-drawer" class="save-drawer" aria-labelledby="save-title" aria-hidden="true">
+      <div class="drawer-heading"><div><p class="eyebrow">命簿藏室</p><h2 id="save-title">设置与命簿</h2></div><button id="close-save-drawer" class="seal-button" type="button" aria-label="关闭藏室">收</button></div>
+      <section id="save-drawer-view">
+        <p>每次选择后自动保存在当前浏览器，也可导出 JSON。Agnes Key 不会进入导出的命簿。</p>
+        <div class="drawer-actions"><button id="export-save" class="secondary-button" type="button">导出命簿</button><label class="file-button" for="import-save">导入命簿</label><input id="import-save" type="file" accept="application/json,.json" hidden></div>
+        <button id="open-agnes-settings" class="settings-entry-button" type="button"><span>Agnes 设置</span><small>填写玩家自己的 Key</small></button>
+        <div class="danger-zone"><h3>重写命簿</h3><button id="request-reset" class="danger-button" type="button">准备重开</button><div id="reset-confirmation" hidden><span>确定清除这一生？</span><button id="cancel-reset" type="button">取消</button><button id="confirm-reset" type="button">确定重开</button></div></div>
+      </section>
+      <section id="agnes-settings-view" class="agnes-settings-view" aria-labelledby="agnes-settings-title" hidden>
+        <button id="back-from-agnes-settings" class="back-button" type="button">返回命簿藏室</button>
+        <div class="agnes-settings-heading"><span aria-hidden="true">灵</span><div><p class="eyebrow">玩家自持凭证</p><h2 id="agnes-settings-title">连接 Agnes</h2></div></div>
+        <p class="agnes-key-warning">Key 仅保存在当前设备浏览器，并会在你主动使用 AI 功能时直接发送给 Agnes。不要在公共设备保存。</p>
+        <label class="agnes-key-label" for="agnes-key-input">Agnes API Key</label>
+        <div class="secret-input-row"><input id="agnes-key-input" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="粘贴你自己的 Key"><button id="toggle-agnes-key-visibility" type="button" aria-pressed="false">显示</button></div>
+        <label class="remember-key-option"><input id="remember-agnes-key" type="checkbox"><span><strong>在此设备记住</strong><small>不勾选时仅保留到本次浏览器会话结束</small></span></label>
+        <div class="agnes-settings-actions"><button id="save-agnes-settings" class="primary-button" type="button">保存设置</button><button id="test-agnes-connection" class="secondary-button" type="button">测试连接</button></div>
+        <p id="agnes-settings-status" class="agnes-settings-status" role="status">未保存 Key，当前使用离线命簿引擎。</p>
+        <div class="agnes-key-clear"><button id="request-clear-agnes-key" class="danger-button" type="button">清除已保存的 Key</button><div id="clear-agnes-confirmation" hidden><p>将同时清除本次会话和此设备保存的 Key。</p><button id="cancel-clear-agnes-key" type="button">取消</button><button id="confirm-clear-agnes-key" type="button">确认清除</button></div></div>
+      </section>
+    </aside>
+    <div id="drawer-scrim" class="drawer-scrim" hidden></div>
+    <section id="end-screen" class="end-screen" aria-labelledby="end-title" hidden><p class="eyebrow">命簿封卷</p><h2 id="end-title">此生已尽</h2><p id="end-summary"></p><button id="restart-from-end" class="primary-button" type="button">再开一世</button></section>
+    <div id="fate-seal" class="fate-seal" aria-hidden="true">定</div>
+    <div id="toast" class="toast" role="status" hidden></div>
+    <script type="module" src="./public/app.mjs?v=20260824-r8-static405"></script>
+  </body>
+</html>

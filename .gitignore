@@ -1,0 +1,32 @@
+# Secrets and local configuration
+.env
+.env.*
+*.env
+*.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Dependencies, caches, logs, and local tooling
+node_modules/
+coverage/
+.playwright-cli/
+playwright-report/
+test-results/
+*.log
+*.pid
+.DS_Store
+Thumbs.db
+
+# Generated packages and redundant local snapshots
+output/
+cs/
+*.zip
+
+# Local requirements, plans, evidence, and working notes
+docs/
+DESIGN.md
+pitfalls.md
+/万古至尊_天武纪元_AI文本人生模拟器开发文档.md
+/万古至尊_天武纪元_原著角色与功法扩展库.md
