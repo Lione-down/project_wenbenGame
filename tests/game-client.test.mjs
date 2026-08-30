@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 
 import {
   SAVE_KEY,
+  configurePlayerAgnesDirect,
   loadLocalGame,
+  requestAgnesResolution,
   requestAgnesEvent,
   saveLocalGame,
   streamAgnesEvent,
@@ -69,24 +71,16 @@ test("requestAgnesEvent exposes provider failure instead of choosing an offline 
   );
 });
 
-test("streamAgnesEvent reports token deltas and returns the validated complete event", async () => {
+test("streamAgnesEvent consumes one JSON response without token streaming", async () => {
   const event = { id: "agnes-stream-1", title: "红月问途", choices: [] };
-  const frames = [
-    "event: delta\ndata: {\"text\":\"红月\"}\n\n",
-    "event: delta\ndata: {\"text\":\"城外\"}\n\n",
-    `event: complete\ndata: ${JSON.stringify({ event, fallback: false })}\n\n`,
-  ].join("");
-  const bytes = new TextEncoder().encode(frames);
   const fetchImpl = async (url, request) => {
-    assert.equal(url, "/api/fate/stream");
+    assert.equal(url, "/api/agent/stream");
+    assert.equal(request.headers.Accept, "application/json");
     assert.equal(JSON.parse(request.body).action, "打听化神海消息");
-    return new Response(new ReadableStream({
-      start(controller) {
-        controller.enqueue(bytes.slice(0, 13));
-        controller.enqueue(bytes.slice(13));
-        controller.close();
-      },
-    }), { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    return new Response(JSON.stringify({ event, fallback: false }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
   };
   const deltas = [];
 
@@ -98,43 +92,36 @@ test("streamAgnesEvent reports token deltas and returns the validated complete e
     (text) => deltas.push(text),
   );
 
-  assert.deepEqual(deltas, ["红月", "城外"]);
+  assert.deepEqual(deltas, []);
   assert.deepEqual(result, event);
 });
 
-test("streamAgnesEvent falls back to non-stream only when streaming is unavailable", async () => {
-  const event = { id: "agnes-fallback-1", title: "命簿续页", choices: [] };
+test("streamAgnesEvent never falls back to the legacy fate endpoint", async () => {
   const urls = [];
   const fetchImpl = async (url) => {
     urls.push(url);
-    if (url === "/api/fate/stream") {
-      return new Response(JSON.stringify({ error: "stream_unavailable" }), { status: 501 });
-    }
-    return new Response(JSON.stringify({ event }), { status: 200 });
+    return new Response(JSON.stringify({ error: "stream_unavailable" }), { status: 501 });
   };
 
-  const result = await streamAgnesEvent(fetchImpl, state, [], "", () => {});
-
-  assert.deepEqual(urls, ["/api/fate/stream", "/api/fate"]);
-  assert.deepEqual(result, event);
+  await assert.rejects(
+    () => streamAgnesEvent(fetchImpl, state, [], "", () => {}),
+    (error) => error.code === "stream_unavailable" && error.status === 501,
+  );
+  assert.deepEqual(urls, ["/api/agent/stream"]);
 });
 
 test("streamAgnesEvent returns a deterministic display-only event for raw Provider content", async () => {
   const rawContent = '<img src=x onerror="globalThis.pwned=true">红月城残页';
   let calls = 0;
-  const frames = [
-    `event: delta\ndata: ${JSON.stringify({ text: rawContent })}\n\n`,
-    `event: complete\ndata: ${JSON.stringify({
+  const fetchImpl = async () => {
+    calls += 1;
+    return new Response(JSON.stringify({
       event: null,
       rawContent,
       structured: false,
       validationReason: "event_contract_drift",
       fallback: false,
-    })}\n\n`,
-  ].join("");
-  const fetchImpl = async () => {
-    calls += 1;
-    return new Response(frames, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
   };
 
   const event = await streamAgnesEvent(fetchImpl, state, [], "", () => {});
@@ -143,7 +130,10 @@ test("streamAgnesEvent returns a deterministic display-only event for raw Provid
   assert.equal(event.displayOnly, true);
   assert.equal(event.providerRawContent, rawContent);
   assert.doesNotMatch(event.scene, /onerror|globalThis\.pwned/);
-  assert.deepEqual(event.choices.map((choice) => choice.effects), [{}, {}]);
+  assert.deepEqual(event.choices.map((choice) => choice.id), [
+    "retry-agnes-generation", "use-offline-engine", "stay-display-only",
+  ]);
+  assert.deepEqual(event.choices.map((choice) => choice.effects), [{}, {}, {}]);
 });
 
 test("display-only fate content cannot enter local state settlement", async () => {
@@ -160,19 +150,46 @@ test("display-only fate content cannot enter local state settlement", async () =
   assert.doesNotMatch(JSON.stringify(settled), /改变气血与背包|<script>/);
 });
 
-test("streamAgnesEvent never retries after receiving a delta without complete", async () => {
+test("streamAgnesEvent never retries after receiving malformed JSON", async () => {
   let calls = 0;
   const fetchImpl = async () => {
     calls += 1;
-    return new Response('event: delta\ndata: {"text":"半段 token"}\n\n', {
+    return new Response('{"event":', {
       status: 200,
-      headers: { "Content-Type": "text/event-stream" },
+      headers: { "Content-Type": "application/json" },
     });
   };
 
   await assert.rejects(
     () => streamAgnesEvent(fetchImpl, state, [], "", () => {}),
-    (error) => error.code === "network_unavailable",
+    (error) => error.code === "provider_error",
   );
   assert.equal(calls, 1);
+});
+
+test("player-key direct mode forwards the explicit H5 transport policy", async () => {
+  const transportOptions = [];
+  const module = {
+    async streamPlayerAgentTurn(...args) {
+      transportOptions.push(args.at(-1));
+      return { event: { id: "h5-event", title: "H5 命途", choices: [] }, rawContent: "正文" };
+    },
+    async streamPlayerAgnesResolution(...args) {
+      transportOptions.push(args.at(-1));
+      return { resolution: { narrative: "完成" }, rawContent: "完成", structured: true };
+    },
+  };
+  const pendingState = structuredClone(state);
+  pendingState.meta.pendingResolution = { id: "h5-resolution" };
+  configurePlayerAgnesDirect(module, "fixture-key", { transportPolicy: "browser-fetch" });
+  try {
+    await streamAgnesEvent(async () => Response.json({}), state, [], "继续", () => {});
+    await requestAgnesResolution(async () => Response.json({}), pendingState, () => {});
+    assert.deepEqual(transportOptions, [
+      { transportPolicy: "browser-fetch" },
+      { transportPolicy: "browser-fetch" },
+    ]);
+  } finally {
+    configurePlayerAgnesDirect(null, "");
+  }
 });

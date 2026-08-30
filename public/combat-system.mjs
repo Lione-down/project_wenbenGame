@@ -6,6 +6,13 @@ const ELEMENT_OVERCOMES = Object.freeze({
   火: "金",
 });
 
+export const COMBAT_SKILL_CATALOG = Object.freeze({
+  "basic-palm": { id: "basic-palm", name: "《基础吐纳掌》", type: "掌法", element: null, power: 1, spiritCost: 4, descriptions: ["掌风贴地掠过，逼得对手换步。", "你沉肩送掌，元气在寸许间骤然吐出。"] },
+  "falling-petal-sword": { id: "falling-petal-sword", name: "《落英剑诀》", type: "剑法", element: "木", power: 1.22, spiritCost: 8, descriptions: ["剑光如落英错叠，虚实在一息间互换。", "你以半式落英封住退路，剑锋随风递进。"] },
+  "star-breaking-palm": { id: "star-breaking-palm", name: "《碎星掌》", type: "掌法", element: "土", power: 1.3, spiritCost: 10, descriptions: ["掌势沉如坠星，脚下碎石同时跃起。", "你将元气压在掌缘，迎着敌势正面震开。"] },
+  "free-step": { id: "free-step", name: "《逍遥步》", type: "身法", element: "风", power: 0.82, spiritCost: 6, descriptions: ["你踏过对方视线死角，衣角只留下一线残影。", "步法忽左忽右，将杀机牵向空处。"] },
+});
+
 function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, value));
 }
@@ -56,6 +63,16 @@ export function getCombatForecast(state, encounter) {
 
 function readRoll(value) {
   return Number.isFinite(value) ? clamp(Number(value), 0, 1) : 0.5;
+}
+
+export function getLearnedCombatSkills(state) {
+  const learned = Array.isArray(state?.player?.martialSkills)
+    ? state.player.martialSkills
+    : [{ id: "basic-palm", mastery: 0 }];
+  return learned.flatMap((entry) => {
+    const skill = COMBAT_SKILL_CATALOG[entry.id];
+    return skill ? [{ ...skill, mastery: Math.max(0, Number(entry.mastery) || 0) }] : [];
+  });
 }
 
 export function createEncounterFromEvent(state, event) {
@@ -142,24 +159,40 @@ export function resolveCombatEncounterChoice(state, event, choiceId, options = {
     return resolveFailedExit(state, encounter, choice.action, options);
   }
 
+  const learnedSkills = getLearnedCombatSkills(state);
+  const skillId = options.skillId || learnedSkills[0]?.id;
+  if (!learnedSkills.some((skill) => skill.id === skillId)) throw new Error("尚未习得这门战斗武技");
   let roundState = structuredClone(state);
   let roundEncounter = encounter;
   let result = null;
   for (let round = 0; round < 32; round += 1) {
-    result = resolveCombatAction(roundState, roundEncounter, "attack", options);
+    result = resolveCombatAction(roundState, roundEncounter, "attack", { ...options, skillId });
     roundState = result.state;
     roundEncounter = result.encounter;
-    if (result.outcome.status !== "ongoing") return result;
+    if (result.outcome.status !== "ongoing") {
+      if (result.outcome.status === "victory") {
+        const reward = event.encounter?.reward || {};
+        for (const [itemId, quantity] of Object.entries(reward)) {
+          result.state.player.inventory[itemId] = (result.state.player.inventory[itemId] ?? 0) + Math.max(0, Math.floor(quantity));
+        }
+        result.state.player.growth ??= { martialInsight: 0, techniqueUnderstanding: 0, martialMind: 0, adventureAccumulation: 0 };
+        result.state.player.growth.martialInsight += event.encounter?.category === "hunting" ? 12 : 8;
+        result.state.player.growth.adventureAccumulation += event.encounter?.category === "opportunity" ? 15 : 7;
+        result.outcome.reward = structuredClone(reward);
+      }
+      return result;
+    }
   }
   throw new Error("战斗结算超过本地回合上限");
 }
 
-export function resolveCombatAction(state, encounter, action, { roll } = {}) {
+export function resolveCombatAction(state, encounter, action, { roll, skillId } = {}) {
   if (state?.meta?.status !== "active") throw new Error("此生命簿已经封存");
   if (!new Set(["attack", "defend", "escape", "negotiate"]).has(action)) {
     throw new Error("战斗行动无效");
   }
   const next = structuredClone(state);
+  next.player.martialSkills ??= [{ id: "basic-palm", mastery: 0 }];
   const target = structuredClone(encounter);
   const forecast = getCombatForecast(next, target);
   const check = readRoll(roll);
@@ -198,19 +231,31 @@ export function resolveCombatAction(state, encounter, action, { roll } = {}) {
   }
 
   let playerDamage = 0;
+  let skill = null;
+  let combatDescription = "";
   if (action === "attack") {
-    const elementMultiplier = getElementMultiplier(next.player.spiritRoot.primaryElement, target.element);
+    skill = getLearnedCombatSkills(next).find((candidate) => candidate.id === (skillId || getLearnedCombatSkills(next)[0]?.id));
+    if (!skill) throw new Error("尚未习得这门战斗武技");
+    const element = skill.element || next.player.spiritRoot.primaryElement;
+    const elementMultiplier = getElementMultiplier(element, target.element);
+    const canPaySpirit = next.player.resources.spirit >= skill.spiritCost;
+    if (canPaySpirit) next.player.resources.spirit -= skill.spiritCost;
+    const masteryMultiplier = 1 + Math.min(0.35, skill.mastery * 0.002);
     playerDamage = Math.floor(
-      (20 + next.player.stats.insight * 0.8) * forecast.playerDamageMultiplier * elementMultiplier,
+      (20 + next.player.stats.insight * 0.8) * forecast.playerDamageMultiplier * elementMultiplier *
+      skill.power * masteryMultiplier * (canPaySpirit ? 1 : 0.45),
     );
     target.vitality = Math.max(0, target.vitality - playerDamage);
+    const learned = next.player.martialSkills.find((entry) => entry.id === skill.id);
+    learned.mastery = Math.min(100, (learned.mastery || 0) + 1);
+    combatDescription = skill.descriptions[(next.meta.turn + learned.mastery) % skill.descriptions.length];
   }
 
   if (target.vitality <= 0) {
     return {
       state: next,
       encounter: target,
-      outcome: { status: "victory", playerDamage, enemyDamage: 0, summary: `${next.player.name}击败${target.name}。`, forecast },
+      outcome: { status: "victory", skillId: skill?.id, combatDescription, playerDamage, enemyDamage: 0, summary: `${combatDescription}${next.player.name}以${skill?.name || "武技"}击败${target.name}。`, forecast },
     };
   }
 
@@ -237,7 +282,9 @@ export function resolveCombatAction(state, encounter, action, { roll } = {}) {
       status: "ongoing",
       playerDamage,
       enemyDamage,
-      summary: `${forecast.warning} 本轮你造成 ${playerDamage} 点伤害，承受 ${enemyDamage} 点伤害。`,
+      skillId: skill?.id,
+      combatDescription,
+      summary: `${combatDescription}${forecast.warning} 本轮你造成 ${playerDamage} 点伤害，承受 ${enemyDamage} 点伤害。`,
       forecast,
     },
   };

@@ -100,8 +100,8 @@ test("runtime viewport authority recovers from device emulation changes without 
     readFile(new URL("public/app.mjs", projectUrl), "utf8"),
   ]);
 
-  assert.match(html, /styles\.css\?v=20260824-r8/);
-  assert.match(html, /app\.mjs\?v=20260824-r8/);
+  assert.match(html, /styles\.css\?v=20260830-p1b/);
+  assert.match(html, /app\.mjs\?v=20260830-p1b/);
   assert.match(app, /function getEffectiveViewportWidth\(\)/);
   assert.match(app, /classList\.toggle\("compact-viewport"/);
   assert.match(app, /visualViewport\?\.addEventListener\("resize",\s*syncViewportMode/);

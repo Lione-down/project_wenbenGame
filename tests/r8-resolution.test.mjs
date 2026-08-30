@@ -150,32 +150,28 @@ test("strict resolution contract allows rich narration but rejects malformed, lo
   assert.throws(() => contract.parseAgnesResolution(JSON.stringify({ ...validNarrative(), narrative: "长".repeat(1601) })), /narrative/);
 });
 
-test("resolution client consumes delta and complete in exactly one SSE request", async () => {
+test("resolution client consumes exactly one JSON response without deltas", async () => {
   const client = await import("../public/game-client.mjs");
   assert.equal(typeof client.requestAgnesResolution, "function");
   const state = await settledState();
   let successCalls = 0;
   const deltas = [];
   const rawContent = JSON.stringify(validNarrative());
-  const frames = [
-    'event: delta\ndata: {"text":"你伸手"}\n\n',
-    `event: complete\ndata: ${JSON.stringify({
+  const resolved = await client.requestAgnesResolution(async (url, options) => {
+    successCalls += 1;
+    assert.equal(url, "/api/agent/resolution");
+    assert.equal(options.headers.Accept, "application/json");
+    const body = JSON.parse(options.body);
+    assert.equal(body.resolution.id, state.meta.pendingResolution.id);
+    return new Response(JSON.stringify({
       resolution: validNarrative(),
       rawContent,
       structured: true,
       fallback: false,
-    })}\n\n`,
-  ].join("");
-  const resolved = await client.requestAgnesResolution(async (url, options) => {
-    successCalls += 1;
-    assert.equal(url, "/api/resolution");
-    assert.equal(options.headers.Accept, "text/event-stream");
-    const body = JSON.parse(options.body);
-    assert.equal(body.resolution.id, state.meta.pendingResolution.id);
-    return new Response(frames, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
   }, state, (delta) => deltas.push(delta));
   assert.equal(successCalls, 1);
-  assert.deepEqual(deltas, ["你伸手"]);
+  assert.deepEqual(deltas, []);
   assert.deepEqual(resolved, {
     resolution: validNarrative(),
     rawContent,

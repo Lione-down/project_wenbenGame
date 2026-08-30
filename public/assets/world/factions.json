@@ -1,0 +1,4 @@
+[
+  { "id": "qinglan-sect", "name": "青岚宗", "type": "faction", "keywords": ["宗门", "青岚"], "summary": "以引气、剑诀与外门历练立宗的北地宗门。" },
+  { "id": "black-arrow", "name": "黑箭盟", "type": "faction", "keywords": ["掮客", "暗杀", "黑箭"], "summary": "通过情报差和代理人布局的地下势力。" }
+]

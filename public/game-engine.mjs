@@ -159,6 +159,23 @@ const PATH_GOALS = {
 
 const SEASONS = ["冬", "春", "春", "春", "夏", "夏", "夏", "秋", "秋", "秋", "冬", "冬"];
 
+export const TIME_ACTIVITY_CONFIG = Object.freeze({
+  dialogue: { passiveCultivation: 0.6, martialInsight: 0.05, techniqueUnderstanding: 0.08, martialMind: 0.08, adventure: 0.1 },
+  mainline: { passiveCultivation: 0.5, martialInsight: 0.35, techniqueUnderstanding: 0.2, martialMind: 0.25, adventure: 0.8 },
+  travel: { passiveCultivation: 0.4, martialInsight: 0.15, techniqueUnderstanding: 0.15, martialMind: 0.12, adventure: 0.55 },
+  secretRealm: { passiveCultivation: 0.7, martialInsight: 0.5, techniqueUnderstanding: 0.45, martialMind: 0.3, adventure: 1 },
+  combat: { passiveCultivation: 0.2, martialInsight: 1.2, techniqueUnderstanding: 0.35, martialMind: 0.5, adventure: 1.1 },
+  sect: { passiveCultivation: 0.6, martialInsight: 0.25, techniqueUnderstanding: 0.25, martialMind: 0.18, adventure: 0.45 },
+  craft: { passiveCultivation: 0.3, martialInsight: 0.08, techniqueUnderstanding: 0.6, martialMind: 0.16, adventure: 0.25 },
+  healing: { passiveCultivation: 0.2, martialInsight: 0.02, techniqueUnderstanding: 0.05, martialMind: 0.1, adventure: 0.05 },
+  retreat: { passiveCultivation: 1.4, martialInsight: 0.12, techniqueUnderstanding: 0.5, martialMind: 0.35, adventure: 0 },
+  sealed: { passiveCultivation: 0, martialInsight: 0, techniqueUnderstanding: 0, martialMind: 0.05, adventure: 0 },
+});
+
+const MARTIAL_SKILL_FOUNDATION = Object.freeze([
+  { id: "basic-palm", name: "《基础吐纳掌》", type: "掌法", element: "neutral", power: 1, spiritCost: 4, mastery: 0 },
+]);
+
 function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, value));
 }
@@ -323,8 +340,8 @@ function evolveNpcEcologyInPlace(state) {
   }
 }
 
-function advanceOneMonthInPlace(state) {
-  state.meta.turn += 1;
+function advanceCalendarMonthInPlace(state, { incrementTurn = true } = {}) {
+  if (incrementTurn) state.meta.turn += 1;
   state.meta.elapsedMonths = Number(state.meta.elapsedMonths || 0) + 1;
   state.world.month = Number(state.world.month || 1) + 1;
   if (state.world.month > 12) {
@@ -342,6 +359,10 @@ function advanceOneMonthInPlace(state) {
     state.meta.status = "dead";
   }
   evolveNpcEcologyInPlace(state);
+}
+
+function advanceOneMonthInPlace(state) {
+  advanceCalendarMonthInPlace(state, { incrementTurn: true });
 }
 
 export function advanceOneMonth(state, {
@@ -382,6 +403,188 @@ export function cultivateOneMonth(state, { mode = "normal" } = {}) {
     result: `${next.player.name}本月获得修为 ${calculation.monthlyGain} 点。`,
   });
   return { state: next, ...calculation };
+}
+
+function ensureGrowthState(state) {
+  state.player.growth ??= {
+    martialInsight: 0,
+    techniqueUnderstanding: 0,
+    martialMind: 0,
+    adventureAccumulation: 0,
+    cultivationRemainder: 0,
+    realmDays: 0,
+    recentActivities: [],
+  };
+  state.meta.elapsedDays ??= Number(state.meta.elapsedMonths || 0) * 30;
+  state.world.day ??= 1;
+}
+
+function activityGrowth(state, durationDays, activityType) {
+  const config = TIME_ACTIVITY_CONFIG[activityType];
+  if (!config) throw new Error("活动类型无效");
+  const blocked = state.player.abnormal === "垂死" || state.player.resources.wound >= 85;
+  const calculation = calculateMonthlyCultivation(state, { mode: "normal" });
+  const monthFraction = durationDays / 30;
+  return {
+    config,
+    cultivationRaw: blocked ? 0 : calculation.monthlyGain * config.passiveCultivation * monthFraction,
+    martialInsight: config.martialInsight * durationDays,
+    techniqueUnderstanding: config.techniqueUnderstanding * durationDays,
+    martialMind: config.martialMind * durationDays,
+    adventure: config.adventure * durationDays,
+    blocked,
+  };
+}
+
+export function advanceGameTime(state, {
+  durationDays,
+  activityType = "mainline",
+  eventTitle = "岁月流转",
+  result = "时间依照行动本身流逝。",
+  worldUpdate = result,
+  recordChronicle = true,
+} = {}) {
+  if (state?.meta?.status !== "active") throw new Error("此生命簿已经封存");
+  if (!Number.isInteger(durationDays) || durationDays <= 0 || durationDays > 3650) {
+    throw new Error("活动耗时必须是 1 到 3650 天的整数");
+  }
+  const next = structuredClone(state);
+  ensureGrowthState(next);
+  const growth = activityGrowth(next, durationDays, activityType);
+  const cultivationTotal = growth.cultivationRaw + next.player.growth.cultivationRemainder;
+  const cultivationGain = Math.floor(cultivationTotal);
+  next.player.growth.cultivationRemainder = cultivationTotal - cultivationGain;
+  next.player.cultivation += cultivationGain;
+  next.player.growth.martialInsight += growth.martialInsight;
+  next.player.growth.techniqueUnderstanding += growth.techniqueUnderstanding;
+  next.player.growth.martialMind += growth.martialMind;
+  next.player.growth.adventureAccumulation += growth.adventure;
+  next.player.growth.realmDays += durationDays;
+  next.meta.turn += 1;
+
+  for (let day = 0; day < durationDays; day += 1) {
+    next.meta.elapsedDays += 1;
+    next.world.day += 1;
+    if (next.world.day > 30) {
+      next.world.day = 1;
+      advanceCalendarMonthInPlace(next, { incrementTurn: false });
+    }
+  }
+  next.player.growth.recentActivities.push({
+    turn: next.meta.turn,
+    activityType,
+    durationDays,
+    cultivationGain,
+    blocked: growth.blocked,
+  });
+  const cutoff = Math.max(0, next.meta.elapsedDays - 720);
+  next.player.growth.recentActivities = next.player.growth.recentActivities
+    .filter((entry) => (entry.elapsedDay ?? next.meta.elapsedDays) >= cutoff)
+    .slice(-120)
+    .map((entry) => ({ ...entry, elapsedDay: entry.elapsedDay ?? next.meta.elapsedDays }));
+  next.world.latest = String(worldUpdate).slice(0, 200);
+  next.world.danger = assessWorldDanger(next);
+  if (next.meta.turn % 3 === 0) advanceAntagonistPlansInPlace(next);
+  const timeSummary = `${String(result).slice(0, 200)}（耗时 ${durationDays} 天，被动修为 +${cultivationGain}）`;
+  if (recordChronicle) {
+    next.chronicle.push({
+      year: next.world.year,
+      month: next.world.month,
+      day: next.world.day,
+      age: next.player.age,
+      eventTitle: String(eventTitle).slice(0, 40),
+      result: timeSummary,
+    });
+  } else if (next.chronicle.length > 0) {
+    next.chronicle.at(-1).year = next.world.year;
+    next.chronicle.at(-1).month = next.world.month;
+    next.chronicle.at(-1).day = next.world.day;
+    next.chronicle.at(-1).age = next.player.age;
+    next.chronicle.at(-1).result = timeSummary;
+  }
+  return next;
+}
+
+export function assessWorldDanger(state) {
+  const reputation = Math.max(0, Number(state.player?.resources?.reputation) || 0);
+  const karma = Math.max(0, Number(state.player?.resources?.karma) || 0);
+  const rareInventory = Object.entries(state.player?.inventory || {})
+    .filter(([itemId, quantity]) => quantity > 0 && new Set(["daoFragment", "rootOrb", "divineCrystal", "starIron"]).has(itemId))
+    .reduce((total, [, quantity]) => total + Number(quantity), 0);
+  const activeAntagonists = (state.world?.antagonists || []).filter((entry) => entry.active !== false);
+  const knownIntel = activeAntagonists.reduce(
+    (total, antagonist) => total + (Array.isArray(antagonist.knownIntel) ? antagonist.knownIntel.length : 0),
+    0,
+  );
+  const score = clamp(Math.round(18 + reputation * 0.15 + karma * 0.5 + rareInventory * 6 + activeAntagonists.length * 4 + knownIntel * 3), 0, 100);
+  const level = score >= 80 ? "绝险" : score >= 60 ? "高危" : score >= 35 ? "中危" : "低危";
+  const reasons = [];
+  if (reputation >= 50) reasons.push("名声已足以引来强敌注意");
+  if (karma >= 20) reasons.push("恶业积累正在反噬因果");
+  if (rareInventory > 0) reasons.push("持有珍稀资产可能招来觊觎");
+  if (knownIntel > 0) reasons.push("敌对势力已掌握玩家相关线索");
+  if (reasons.length === 0) reasons.push("声名未显，但世界仍会独立运转");
+  return { level, score, reasons };
+}
+
+function advanceAntagonistPlansInPlace(state) {
+  for (const antagonist of state.world?.antagonists || []) {
+    if (antagonist.active === false) continue;
+    const intel = Array.isArray(antagonist.knownIntel) ? antagonist.knownIntel : [];
+    antagonist.currentPlan = intel.length >= 2
+      ? antagonist.longPlan
+      : intel.length === 1
+        ? antagonist.shortPlan
+        : "继续收集商队、驿站与药材流向，不贸然暴露暗线";
+    antagonist.planHistory ??= [];
+    antagonist.planHistory.push({
+      turn: state.meta.turn,
+      knownIntel: intel.slice(-6),
+      plan: antagonist.currentPlan,
+    });
+    if (antagonist.planHistory.length > 24) antagonist.planHistory.splice(0, antagonist.planHistory.length - 24);
+  }
+}
+
+export function advanceAntagonistPlans(state) {
+  const next = structuredClone(state);
+  advanceAntagonistPlansInPlace(next);
+  next.world.danger = assessWorldDanger(next);
+  return next;
+}
+
+export function convertExperienceDuringRetreat(state, { durationDays = 30 } = {}) {
+  if (!Number.isInteger(durationDays) || durationDays <= 0) throw new Error("闭关时长无效");
+  const available = Math.max(0, Number(state.player.growth?.adventureAccumulation || 0));
+  const conversionCap = durationDays * 1.5;
+  const consumed = Math.min(available * 0.15, conversionCap);
+  const convertedCultivation = Math.floor(consumed * (0.7 + state.player.stats.insight * 0.03));
+  const next = advanceGameTime(state, {
+    durationDays,
+    activityType: "retreat",
+    eventTitle: "闭关融会历练",
+    result: `${state.player.name}将过往历练逐一融入功法周天。`,
+  });
+  next.player.growth.adventureAccumulation = Math.max(0, next.player.growth.adventureAccumulation - consumed);
+  next.player.cultivation += convertedCultivation;
+  return { state: next, convertedCultivation, consumedExperience: consumed };
+}
+
+export function getGrowthPacingStatus(state) {
+  const growth = state.player.growth || {};
+  if (state.player.abnormal === "垂死" || state.player.resources.wound >= 85) {
+    return { isWarning: false, reason: "重伤或垂死状态造成合理停滞", recommendation: "先养伤" };
+  }
+  const activities = Array.isArray(growth.recentActivities) ? growth.recentActivities : [];
+  const recentDays = activities.reduce((total, entry) => total + Number(entry.durationDays || 0), 0);
+  const recentGain = activities.reduce((total, entry) => total + Number(entry.cultivationGain || 0), 0);
+  const expected = recentDays > 0 ? Math.max(1, recentDays / 30 * getRealmCurve(state.player.realmIndex).monthlyBase * 0.35) : 0;
+  const isWarning = growth.realmDays >= 360 && recentGain < expected;
+  return {
+    isWarning,
+    reason: isWarning ? "积极历练但近期成长低于合理区间" : "成长节奏处于合理区间",
+    recommendation: isWarning ? "安排自由成长期并提高历练转化机会" : "保持当前节奏",
+  };
 }
 
 function getRouteMaterials(route, realmIndex) {
@@ -428,6 +631,17 @@ export function getBreakthroughOptions(state) {
       materialLabels: Object.entries(materials).map(
         ([itemId, quantity]) => `${ITEM_LABELS[itemId] ?? itemId} ×${quantity}`,
       ),
+      heldMaterialLabels: Object.entries(materials).map(
+        ([itemId, quantity]) => `${ITEM_LABELS[itemId] ?? itemId} ${state.player.inventory[itemId] ?? 0}/${quantity}`,
+      ),
+      missingMaterials: Object.fromEntries(Object.entries(materials).flatMap(([itemId, quantity]) => {
+        const missing = Math.max(0, quantity - (state.player.inventory[itemId] ?? 0));
+        return missing > 0 ? [[itemId, missing]] : [];
+      })),
+      missingMaterialLabels: Object.entries(materials).flatMap(([itemId, quantity]) => {
+        const missing = Math.max(0, quantity - (state.player.inventory[itemId] ?? 0));
+        return missing > 0 ? [`${ITEM_LABELS[itemId] ?? itemId} ×${missing}`] : [];
+      }),
       successRate,
       thunderRisk,
       heartDemonRisk,
@@ -743,55 +957,38 @@ function createPlayerFoundation() {
       crop: null,
     },
     relationships: [],
+    knowledge: [{
+      id: "基础引气诀",
+      name: "《基础引气诀》",
+      category: "功法",
+      mastery: 1,
+      depth: "入门",
+      sourceEventId: "fate-book-opening",
+    }, {
+      id: "基础吐纳掌",
+      name: "《基础吐纳掌》",
+      category: "武技",
+      mastery: 0,
+      depth: "未入门",
+      sourceEventId: "fate-book-opening",
+    }],
+    martialSkills: structuredClone(MARTIAL_SKILL_FOUNDATION),
+    growth: {
+      martialInsight: 0,
+      techniqueUnderstanding: 0,
+      martialMind: 0,
+      adventureAccumulation: 0,
+      cultivationRemainder: 0,
+      realmDays: 0,
+      recentActivities: [],
+    },
   };
 }
 
 function createWorldFoundation() {
   return {
-    npcs: [
-      {
-        id: "lin-xuan",
-        name: "林玄",
-        gender: "男",
-        realmIndex: 0,
-        stageIndex: 0,
-        stage: "初期",
-        cultivation: 22,
-        ageMonths: 18 * 12,
-        lifespan: 100,
-        alive: true,
-        goal: "从普通少年走出自己的武道",
-        bonds: [],
-      },
-      {
-        id: "shen-qingli",
-        name: "沈青璃",
-        gender: "女",
-        realmIndex: 5,
-        stageIndex: 1,
-        stage: "中期",
-        cultivation: 310,
-        ageMonths: 24 * 12,
-        lifespan: 500,
-        alive: true,
-        goal: "成为九阶术炼师",
-        bonds: [],
-      },
-      {
-        id: "su-linger",
-        name: "苏灵儿",
-        gender: "女",
-        realmIndex: 1,
-        stageIndex: 0,
-        stage: "初期",
-        cultivation: 48,
-        ageMonths: 22 * 12,
-        lifespan: 175,
-        alive: true,
-        goal: "扩张红月城商路",
-        bonds: [],
-      },
-    ],
+    npcs: [],
+    npcKnowledge: {},
     market: {
       prices: {
         herb: 18,
@@ -803,10 +1000,24 @@ function createWorldFoundation() {
         earthEssence: 760,
         daoFragment: 1200,
         rootOrb: 980,
+        artifact: 180,
+        talisman: 72,
+        formationPlate: 220,
+        beastContract: 160,
+        windHyacinth: 36,
+        divineCrystal: 1800,
+        embroideredDew: 680,
+        yimuQi: 420,
+        starIron: 1500,
+        beastFang: 48,
+        beastHide: 66,
+        frostScale: 240,
       },
       lastRefreshTurn: 0,
     },
     ecologyLog: [],
+    danger: { level: "低危", score: 18, reasons: ["初入武道，声名未显"] },
+    antagonists: [],
   };
 }
 
@@ -853,13 +1064,14 @@ export function createNewGame(profile, seed = Date.now()) {
   const playerFoundation = createPlayerFoundation();
   const worldFoundation = createWorldFoundation();
 
-  return {
+  const state = {
     meta: {
       schemaVersion: SAVE_SCHEMA_VERSION,
       status: "active",
       seed: normalizedSeed,
       turn: 0,
       elapsedMonths: 0,
+      elapsedDays: 0,
       pendingResolution: null,
     },
     player: {
@@ -889,6 +1101,7 @@ export function createNewGame(profile, seed = Date.now()) {
         contribution: 0,
         reputation: 0,
         joinedAtTurn: null,
+        history: [],
       },
       location: profile.birthplace.trim().slice(0, 24),
       abnormal: "无",
@@ -898,6 +1111,7 @@ export function createNewGame(profile, seed = Date.now()) {
     world: {
       year: 1127,
       month: 1,
+      day: 1,
       era: "天衡纪",
       season: "冬",
       unrest: 22,
@@ -913,10 +1127,188 @@ export function createNewGame(profile, seed = Date.now()) {
         result: `${name}于${profile.birthplace.trim()}测得${spiritRoot.grade}，主灵根为${spiritRoot.primaryElement}。`,
       },
     ],
+    recentEvents: [],
+    memories: [],
+    historySummary: [],
+    agent: {
+      effectiveEventCount: 0,
+      usage: {
+        lastPromptTokens: 0,
+        promptTokens20: [],
+        avgPromptTokens20: 0,
+        maxPromptTokens: 0,
+      },
+    },
+  };
+  for (const technique of techniques) {
+    const id = technique.replace(/^《|》$/gu, "");
+    if (!state.player.knowledge.some((entry) => entry.id === id)) {
+      recordKnowledge(state, technique, { masteryGain: 1, sourceEventId: "fate-book-opening", category: "功法" });
+      if (!state.player.techniqueBuild.known.includes(id)) state.player.techniqueBuild.known.push(id);
+    }
+  }
+  return state;
+}
+
+function assertNpcIdentity(npc) {
+  if (!npc || typeof npc !== "object") throw new Error("NPC 资料无效");
+  for (const key of ["id", "name", "gender", "species"]) {
+    if (typeof npc[key] !== "string" || !npc[key].trim()) throw new Error(`NPC ${key} 不能为空`);
+  }
+  if (!Number.isInteger(npc.realmIndex) || npc.realmIndex < 0 || npc.realmIndex >= REALMS.length) {
+    throw new Error("NPC 修为无效");
+  }
+  if (!Number.isInteger(npc.stageIndex) || npc.stageIndex < 0 || npc.stageIndex >= STAGES.length) {
+    throw new Error("NPC 小境界无效");
+  }
+}
+
+export function registerNpcEncounter(state, npc, interaction = {}) {
+  assertNpcIdentity(npc);
+  const next = structuredClone(state);
+  const id = npc.id.trim().slice(0, 48);
+  const context = String(interaction.context || "current");
+  let record = next.world.npcs.find((candidate) => candidate.id === id);
+  if (record && !record.alive && npc.alive !== false && context !== "memory") {
+    throw new Error("死亡 NPC 不得复活或重新在当前剧情行动");
+  }
+  if (!record) {
+    record = {
+      id,
+      name: npc.name.trim().slice(0, 20),
+      gender: npc.gender.trim().slice(0, 20),
+      species: npc.species.trim().slice(0, 20),
+      realmIndex: npc.realmIndex,
+      stageIndex: npc.stageIndex,
+      stage: STAGES[npc.stageIndex],
+      cultivation: Math.max(0, Math.floor(Number(npc.cultivation) || 0)),
+      ageMonths: Math.max(0, Math.floor(Number(npc.ageMonths) || 18 * 12)),
+      lifespan: Math.max(1, Math.floor(Number(npc.lifespan) || 100 + npc.realmIndex * 60)),
+      alive: npc.alive !== false,
+      deathCause: npc.alive === false ? String(npc.deathCause || "死因未记载").slice(0, 80) : null,
+      deathTurn: npc.alive === false ? next.meta.turn : null,
+      goal: String(npc.goal || "去向未明").slice(0, 100),
+      bonds: [],
+      interactions: [],
+    };
+    next.world.npcs.push(record);
+  }
+  record.interactions ??= [];
+  record.interactions.push({
+    turn: next.meta.turn,
+    year: next.world.year,
+    month: next.world.month,
+    day: next.world.day ?? 1,
+    eventId: String(interaction.eventId || "unknown").slice(0, 48),
+    context: context === "memory" ? "memory" : "current",
+    summary: String(interaction.summary || "与玩家有过一面之缘").slice(0, 160),
+  });
+  if (record.interactions.length > 40) record.interactions.splice(0, record.interactions.length - 40);
+
+  const known = next.player.npcs.find((candidate) => candidate.id === id || candidate.name === record.name);
+  if (known) {
+    known.id = id;
+    known.gender = record.gender;
+    known.species = record.species;
+    known.realmIndex = record.realmIndex;
+    known.stageIndex = record.stageIndex;
+    known.alive = record.alive;
+    known.deathCause = record.deathCause;
+  } else {
+    next.player.npcs.push({
+      id,
+      name: record.name,
+      gender: record.gender,
+      species: record.species,
+      realmIndex: record.realmIndex,
+      stageIndex: record.stageIndex,
+      alive: record.alive,
+      deathCause: record.deathCause,
+      role: String(npc.role || "途中所遇").slice(0, 24),
+      stance: "初识",
+      goal: record.goal,
+      relation: 0,
+    });
+  }
+  if (context !== "memory") {
+    const relationship = next.player.relationships.find((candidate) => candidate.npcId === id);
+    if (!relationship) {
+      next.player.relationships.push({
+        npcId: id,
+        name: record.name,
+        affection: 0,
+        stage: "初识",
+        bond: "主线人物",
+        romanceEnabled: false,
+      });
+    } else {
+      relationship.name = record.name;
+    }
+  }
+  return next;
+}
+
+export function markNpcDead(state, npcId, deathCause) {
+  const next = structuredClone(state);
+  const npc = next.world.npcs.find((candidate) => candidate.id === npcId);
+  if (!npc) throw new Error("NPC 不存在");
+  if (!npc.alive) return next;
+  npc.alive = false;
+  npc.deathCause = String(deathCause || "死因未记载").slice(0, 80);
+  npc.deathTurn = next.meta.turn;
+  const known = next.player.npcs.find((candidate) => candidate.id === npcId || candidate.name === npc.name);
+  if (known) {
+    known.alive = false;
+    known.deathCause = npc.deathCause;
+  }
+  logEcology(next, { type: "death", npcId, text: `${npc.name}${npc.deathCause}，身死道消。` });
+  return next;
+}
+
+export function getNpcDossier(state, npcId) {
+  const npc = state.world.npcs.find((candidate) => candidate.id === npcId);
+  if (!npc) throw new Error("NPC 不存在");
+  return {
+    ...structuredClone(npc),
+    realm: `${REALMS[npc.realmIndex]}·${STAGES[npc.stageIndex]}`,
+    interactions: structuredClone(npc.interactions || []),
   };
 }
 
-function applyChoiceConsequencesInPlace(state, choice) {
+function knowledgeDepth(mastery) {
+  if (mastery <= 0) return "未入门";
+  if (mastery < 25) return "入门";
+  if (mastery < 50) return "小成";
+  if (mastery < 80) return "大成";
+  return "圆满";
+}
+
+function inferKnowledgeCategory(name) {
+  if (name.includes("阵")) return "阵法";
+  if (/[剑刀枪拳掌指爪棍戟式]/u.test(name)) return "武技";
+  if (/[步身法遁]/u.test(name)) return "身法";
+  if (/[丹器符植兽炼]/u.test(name)) return "技艺";
+  return "功法";
+}
+
+function recordKnowledge(state, rawName, { masteryGain = 1, sourceEventId = "unknown", category = "" } = {}) {
+  const name = String(rawName || "").trim().slice(0, 40);
+  if (!name) return;
+  const id = name.replace(/^《|》$/gu, "");
+  const resolvedCategory = category || inferKnowledgeCategory(id);
+  state.player.knowledge ??= [];
+  let entry = state.player.knowledge.find((candidate) => candidate.id === id);
+  if (!entry) {
+    entry = { id, name: `《${id}》`, category: resolvedCategory, mastery: 0, depth: "未入门", sourceEventId };
+    state.player.knowledge.push(entry);
+  }
+  entry.mastery = clamp((Number(entry.mastery) || 0) + masteryGain, 0, 100);
+  entry.depth = knowledgeDepth(entry.mastery);
+  entry.category = resolvedCategory;
+  if (entry.sourceEventId === "unknown") entry.sourceEventId = sourceEventId;
+}
+
+function applyChoiceConsequencesInPlace(state, choice, eventId = "unknown") {
   for (const [key, rawAmount] of Object.entries(choice.effects ?? {})) {
     const amount = clamp(Number(rawAmount) || 0, -1000, 1000);
     if (STAT_KEYS.has(key)) {
@@ -936,11 +1328,25 @@ function applyChoiceConsequencesInPlace(state, choice) {
       state.player.lifespan = Math.max(16, state.player.lifespan + amount);
     }
   }
+  for (const gain of Array.isArray(choice.skillExperience) ? choice.skillExperience : []) {
+    const skill = state.player.martialSkills?.find((entry) => entry.id === gain.skillId);
+    if (!skill) throw new Error("不能为未习得武技增加熟练度");
+    skill.mastery = clamp((Number(skill.mastery) || 0) + clamp(Number(gain.value) || 0, 0, 20), 0, 100);
+    recordKnowledge(state, skill.name, { masteryGain: clamp(Number(gain.value) || 0, 0, 20), sourceEventId: eventId, category: "武技" });
+  }
 
   if (typeof choice.gainTechnique === "string") {
     const technique = choice.gainTechnique.trim().slice(0, 40);
     if (technique && !state.player.techniques.includes(technique)) {
       state.player.techniques.push(technique);
+    }
+    if (technique) {
+      const category = inferKnowledgeCategory(technique);
+      recordKnowledge(state, technique, { masteryGain: 1, sourceEventId: eventId, category });
+      const buildName = technique.replace(/^《|》$/gu, "");
+      if (category === "功法" && !state.player.techniqueBuild.known.includes(buildName)) {
+        state.player.techniqueBuild.known.push(buildName);
+      }
     }
   }
 
@@ -950,7 +1356,7 @@ function applyChoiceConsequencesInPlace(state, choice) {
       const relationDelta = clamp(Number(choice.npc.relationDelta) || 0, -30, 30);
       const existing = state.player.npcs.find((npc) => npc.name === name);
       if (existing) {
-        existing.relation = clamp(existing.relation + relationDelta, -100, 100);
+        existing.relation = clamp((Number(existing.relation) || 0) + relationDelta, -100, 100);
         existing.stance = String(choice.npc.stance || existing.stance).slice(0, 20);
         existing.goal = String(choice.npc.goal || existing.goal).slice(0, 80);
       } else {
@@ -962,7 +1368,43 @@ function applyChoiceConsequencesInPlace(state, choice) {
           relation: clamp(relationDelta, -100, 100),
         });
       }
+      const worldNpc = state.world.npcs.find((npc) => npc.name === name);
+      if (worldNpc) {
+        let relationship = state.player.relationships.find((entry) => entry.npcId === worldNpc.id);
+        if (!relationship) {
+          relationship = { npcId: worldNpc.id, name, affection: 0, stage: "初识", bond: "主线人物", romanceEnabled: false };
+          state.player.relationships.push(relationship);
+        }
+        relationship.affection = clamp((Number(relationship.affection) || 0) + relationDelta, 0, 120);
+        relationship.stage = relationship.affection >= 80 ? "道侣"
+          : relationship.affection >= 60 ? "暧昧"
+            : relationship.affection >= 40 ? "知己"
+              : relationship.affection >= 20 ? "相识" : "初识";
+      }
     }
+  }
+
+  if (choice.sectUpdate && typeof choice.sectUpdate === "object") {
+    const update = choice.sectUpdate;
+    const name = String(update.name || "").trim().slice(0, 24);
+    if (!name) throw new Error("主线宗门更新缺少宗门名称");
+    if (state.player.sect.name !== "散修" && state.player.sect.name !== name) {
+      throw new Error("主线宗门更新与当前宗门冲突");
+    }
+    state.player.sect.name = name;
+    state.player.sect.position = String(update.position || state.player.sect.position).trim().slice(0, 24);
+    state.player.sect.contribution = Math.max(0, state.player.sect.contribution + clamp(Number(update.contributionDelta) || 0, -20, 20));
+    state.player.sect.reputation = Math.max(0, state.player.sect.reputation + clamp(Number(update.reputationDelta) || 0, -20, 20));
+    state.player.sect.joinedAtTurn ??= state.meta.turn;
+    state.player.sect.history ??= [];
+    state.player.sect.history.push({
+      turn: state.meta.turn,
+      year: state.world.year,
+      month: state.world.month,
+      eventId: String(eventId).slice(0, 48),
+      record: String(update.record || "宗门记录更新").slice(0, 80),
+    });
+    if (state.player.sect.history.length > 60) state.player.sect.history.splice(0, state.player.sect.history.length - 60);
   }
 }
 
@@ -1023,14 +1465,38 @@ export function settleEventChoice(state, event, choiceId, {
     result: `你决定：${normalizedAction}`,
     effects: {},
   };
-  const monthDelta = Number.isInteger(event?.monthDelta) ? event.monthDelta : 1;
-  if (monthDelta !== 1) throw new Error("一个回合只能推进一个月");
+  const timeCostDays = Number.isInteger(event?.timeCostDays)
+    ? event.timeCostDays
+    : (Number.isInteger(event?.monthDelta) ? event.monthDelta * 30 : 1);
+  if (timeCostDays <= 0 || timeCostDays > 3650) throw new Error("事件耗时超出规则范围");
 
-  const next = structuredClone(resolvedState ?? state);
+  let next = structuredClone(resolvedState ?? state);
   if (next.meta.turn !== state.meta.turn || next.world.month !== state.world.month || next.world.year !== state.world.year) {
     throw new Error("本地结算不得提前推进月份");
   }
-  applyChoiceConsequencesInPlace(next, choice);
+  const combatNpc = event.encounter ? {
+    id: event.encounter.npcId || `encounter-${String(event.id).slice(0, 32)}`,
+    name: event.encounter.npcName,
+    gender: event.encounter.gender,
+    species: event.encounter.species,
+    realmIndex: Number.isInteger(event.encounter.realmIndex) ? event.encounter.realmIndex : next.player.realmIndex,
+    stageIndex: Number.isInteger(event.encounter.stageIndex) ? event.encounter.stageIndex : 0,
+    goal: event.encounter.reason,
+    alive: true,
+  } : null;
+  const encounteredNpcs = [
+    ...(Array.isArray(event.encounterNpcs) ? event.encounterNpcs : []),
+    event.encounterNpc,
+    combatNpc,
+  ].filter(Boolean);
+  for (const encountered of encounteredNpcs) {
+    if (!encountered?.id || !encountered?.name || !encountered?.gender || !encountered?.species) continue;
+    next = registerNpcEncounter(next, encountered, {
+      eventId: event.id,
+      summary: String(localOutcome?.summary || choice.result || event.scene),
+    });
+  }
+  applyChoiceConsequencesInPlace(next, choice, event.id);
   refreshPlayerConditionInPlace(next);
   const summary = String(localOutcome?.summary || choice.result || event.scene).slice(0, 240);
   const stateDelta = buildStateDelta(state, next);
@@ -1057,6 +1523,8 @@ export function settleEventChoice(state, event, choiceId, {
       stateDelta,
     },
     worldUpdate: String(event.worldUpdate || event.title).slice(0, 80),
+    timeCostDays,
+    activityType: TIME_ACTIVITY_CONFIG[event.activityType] ? event.activityType : (event.kind === "combat" ? "combat" : "mainline"),
     provider: { status: "pending", resolution: null, error: null },
   };
   next.meta.pendingResolution = pendingResolution;
@@ -1096,12 +1564,17 @@ export function failEventResolution(state, errorCode = "provider_error") {
 export function continueAfterResolution(state) {
   if (!state?.meta?.pendingResolution) throw new Error("本月尚未结算");
   if (state.meta.status !== "active") throw new Error("此生命簿已经封存");
-  const next = structuredClone(state);
-  const worldUpdate = next.meta.pendingResolution.worldUpdate;
-  advanceOneMonthInPlace(next);
-  next.world.latest = worldUpdate;
-  next.meta.pendingResolution = null;
-  return next;
+  const pending = structuredClone(state.meta.pendingResolution);
+  const base = structuredClone(state);
+  base.meta.pendingResolution = null;
+  return advanceGameTime(base, {
+    durationDays: pending.timeCostDays || 30,
+    activityType: pending.activityType || "mainline",
+    eventTitle: pending.event.title,
+    result: pending.localOutcome.summary,
+    worldUpdate: pending.worldUpdate,
+    recordChronicle: false,
+  });
 }
 
 export function applyChoice(state, event, choiceId) {
@@ -1112,24 +1585,22 @@ export function applyChoice(state, event, choiceId) {
   if (!choice) {
     throw new Error("未找到对应选择");
   }
-  const next = structuredClone(state);
-  const monthDelta = Number.isInteger(event.monthDelta) ? event.monthDelta : 1;
-  if (monthDelta !== 1) {
-    throw new Error("一个回合只能推进一个月");
-  }
-  advanceOneMonthInPlace(next);
-  next.world.latest = String(event.worldUpdate || event.title).slice(0, 200);
+  let next = Number.isInteger(event.timeCostDays)
+    ? advanceGameTime(state, {
+      durationDays: event.timeCostDays,
+      activityType: TIME_ACTIVITY_CONFIG[event.activityType] ? event.activityType : (event.kind === "combat" ? "combat" : "mainline"),
+      eventTitle: event.title,
+      result: choice.result || event.scene,
+      worldUpdate: event.worldUpdate || event.title,
+    })
+    : advanceOneMonth(state, {
+      eventTitle: event.title,
+      result: choice.result || event.scene,
+      worldUpdate: event.worldUpdate || event.title,
+    });
 
   applyChoiceConsequencesInPlace(next, choice);
-
-  next.chronicle.push({
-    year: next.world.year,
-    month: next.world.month,
-    age: next.player.age,
-    eventTitle: String(event.title).slice(0, 40),
-    choice: String(choice.label).slice(0, 48),
-    result: String(choice.result || event.scene).slice(0, 240),
-  });
+  next.chronicle.at(-1).choice = String(choice.label).slice(0, 48);
 
   refreshPlayerConditionInPlace(next);
   return next;
@@ -1157,6 +1628,9 @@ export function importGame(serialized) {
   if (parsed?.meta?.schemaVersion === 2) {
     parsed = migrateVersionTwo(parsed);
   }
+  if (parsed?.meta?.schemaVersion === 3) {
+    parsed = migrateVersionThree(parsed);
+  }
   if (parsed?.meta?.schemaVersion !== SAVE_SCHEMA_VERSION) {
     throw new Error("存档版本不受支持");
   }
@@ -1164,11 +1638,11 @@ export function importGame(serialized) {
     throw new Error("存档内容不完整");
   }
   if (parsed.meta.pendingResolution === undefined) parsed.meta.pendingResolution = null;
-  assertVersionThreeState(parsed);
+  assertVersionFourState(parsed);
   return structuredClone(parsed);
 }
 
-function assertVersionThreeState(state) {
+function assertVersionFourState(state) {
   if (Object.hasOwn(state.player, "martialSoul")) {
     throw new Error("R6 存档不得保留旧武魂状态");
   }
@@ -1197,12 +1671,83 @@ function assertVersionThreeState(state) {
   ) {
     throw new Error("存档功法构筑无效");
   }
-  if (!state.player.crafts || !state.player.cave || !Array.isArray(state.player.relationships)) {
+  if (!state.player.crafts || !state.player.cave || !Array.isArray(state.player.relationships) || !Array.isArray(state.player.knowledge)) {
     throw new Error("存档生活系统不完整");
   }
   if (!Array.isArray(state.world.npcs) || !state.world.market?.prices) {
     throw new Error("存档世界生态不完整");
   }
+  if (!state.player.growth || !Array.isArray(state.player.martialSkills) || !Number.isInteger(state.world.day)) {
+    throw new Error("存档时间成长系统不完整");
+  }
+}
+
+function migrateVersionThree(state) {
+  const migrated = structuredClone(state);
+  const playerFoundation = createPlayerFoundation();
+  const worldFoundation = createWorldFoundation();
+  migrated.meta.schemaVersion = SAVE_SCHEMA_VERSION;
+  migrated.meta.elapsedDays ??= Number(migrated.meta.elapsedMonths || 0) * 30;
+  migrated.player.martialSkills ??= playerFoundation.martialSkills;
+  migrated.player.growth ??= playerFoundation.growth;
+  const needsKnowledgeMigration = !Array.isArray(migrated.player.knowledge);
+  if (needsKnowledgeMigration) migrated.player.knowledge = [];
+  migrated.player.sect ??= { name: "散修", position: "无", contribution: 0, reputation: 0, joinedAtTurn: null, history: [] };
+  migrated.player.sect.history ??= [];
+  if (needsKnowledgeMigration) {
+    for (const technique of migrated.player.techniques || []) {
+      recordKnowledge(migrated, technique, { masteryGain: 1, sourceEventId: "save-migration" });
+    }
+    for (const skill of migrated.player.martialSkills || []) {
+      recordKnowledge(migrated, skill.name, { masteryGain: Number(skill.mastery) || 0, sourceEventId: "save-migration", category: "武技" });
+    }
+  }
+  migrated.world.day ??= 1;
+  migrated.world.npcKnowledge ??= {};
+  migrated.world.danger ??= worldFoundation.danger;
+  migrated.world.antagonists ??= worldFoundation.antagonists;
+  migrated.world.market ??= structuredClone(worldFoundation.market);
+  migrated.world.market.prices = {
+    ...worldFoundation.market.prices,
+    ...(migrated.world.market.prices || {}),
+  };
+  const knownNpcIds = new Set((migrated.player.npcs || []).map((npc) => npc.id).filter(Boolean));
+  const knownNpcNames = new Set((migrated.player.npcs || []).map((npc) => npc.name).filter(Boolean));
+  for (const relationship of migrated.player.relationships || []) {
+    if (relationship.npcId) knownNpcIds.add(relationship.npcId);
+    if (relationship.name) knownNpcNames.add(relationship.name);
+  }
+  const legacySeedIds = new Set(["lin-xuan", "shen-qingli", "su-linger"]);
+  migrated.world.npcs = (migrated.world.npcs || []).filter((npc) => (
+    !legacySeedIds.has(npc.id)
+    || (Array.isArray(npc.interactions) && npc.interactions.length > 0)
+    || knownNpcIds.has(npc.id)
+    || knownNpcNames.has(npc.name)
+  )).map((npc) => ({
+    species: "人族",
+    interactions: [],
+    ...npc,
+  }));
+  migrated.world.antagonists = (migrated.world.antagonists || []).filter((antagonist) => (
+    antagonist.id !== "black-arrow-broker"
+    || (Array.isArray(antagonist.knownIntel) && antagonist.knownIntel.length > 0)
+    || (Array.isArray(antagonist.planHistory) && antagonist.planHistory.length > 0)
+    || knownNpcIds.has(antagonist.id)
+    || knownNpcNames.has(antagonist.name)
+  ));
+  migrated.recentEvents ??= [];
+  migrated.memories ??= [];
+  migrated.historySummary ??= [];
+  migrated.agent ??= {
+    effectiveEventCount: 0,
+    usage: {
+      lastPromptTokens: 0,
+      promptTokens20: [],
+      avgPromptTokens20: 0,
+      maxPromptTokens: 0,
+    },
+  };
+  return migrated;
 }
 
 function migrateVersionTwo(state) {
@@ -1213,7 +1758,7 @@ function migrateVersionTwo(state) {
   const primaryElement = SPIRIT_ROOT_ELEMENTS.has(legacyElement) ? legacyElement : "金";
   const grade = ["雷", "风", "冰"].includes(primaryElement) ? "变异灵根" : "真灵根";
 
-  migrated.meta.schemaVersion = SAVE_SCHEMA_VERSION;
+  migrated.meta.schemaVersion = 3;
   migrated.player.spiritRoot = {
     grade,
     elements: [primaryElement],
@@ -1233,11 +1778,12 @@ function migrateVersionTwo(state) {
     contribution: Math.max(0, Number(migrated.player.sect?.contribution) || 0),
     reputation: Math.max(0, Number(migrated.player.sect?.reputation) || 0),
     joinedAtTurn: migrated.player.sect?.joinedAtTurn ?? null,
+    history: Array.isArray(migrated.player.sect?.history) ? migrated.player.sect.history : [],
   };
   migrated.world.npcs = worldFoundation.npcs;
   migrated.world.market = worldFoundation.market;
   migrated.world.ecologyLog = worldFoundation.ecologyLog;
-  return migrated;
+  return migrateVersionThree(migrated);
 }
 
 function migrateVersionOne(state) {
@@ -1247,7 +1793,7 @@ function migrateVersionOne(state) {
   const legacyVitality = clamp(Number(legacyStats.vitality) || 100, 0, 100);
   const legacyWound = clamp(Number(legacyStats.wound) || 0, 0, 100);
 
-  migrated.meta.schemaVersion = SAVE_SCHEMA_VERSION;
+  migrated.meta.schemaVersion = 2;
   migrated.meta.elapsedMonths = Number(migrated.meta.turn || 0);
   migrated.player.daoName = migrated.player.daoName || `玄${String(migrated.player.name || "无名").slice(-1)}`;
   migrated.player.path = migrated.player.path || "随心所欲";
@@ -1276,5 +1822,5 @@ function migrateVersionOne(state) {
   migrated.world.month = migrated.world.month || 1;
   migrated.world.season = migrated.world.season || SEASONS[migrated.world.month - 1];
   migrated.chronicle = migrated.chronicle.map((entry) => ({ month: 1, ...entry }));
-  return migrated;
+  return migrateVersionTwo(migrated);
 }

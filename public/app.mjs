@@ -7,16 +7,24 @@ import {
   cultivateOneMonth,
   exportGame,
   getBreakthroughOptions,
+  getNpcDossier,
   getRealmCurve,
   importGame,
   failEventResolution,
   settleEventChoice,
   SIX_DIMENSION_LABELS,
-} from "./game-engine.mjs?v=20260824-r8";
+} from "./game-engine.mjs?v=20260830-p1b";
+import {
+  deriveAgnesPendingUi,
+  formatAgnesTransportDiagnostic,
+  retryAgnesGeneration,
+} from "./agnes-ui-state.mjs?v=20260830-taptap-diagnostic";
 import {
   buyMarketItem,
   CRAFT_RECIPES,
   equipTechnique,
+  getCaveUpgradeRequirement,
+  getMarketSellPrice,
   interactWithNpc,
   ITEM_CATALOG,
   joinSect,
@@ -27,8 +35,8 @@ import {
   sellMarketItem,
   tendCaveCrop,
   upgradeCave,
-} from "./life-systems.mjs?v=20260824-r6";
-import { resolveCombatEncounterChoice } from "./combat-system.mjs?v=20260824-r8";
+} from "./life-systems.mjs?v=20260829-p0";
+import { getLearnedCombatSkills, resolveCombatEncounterChoice } from "./combat-system.mjs?v=20260829-r9";
 import { chooseOfflineEvent, getOpeningEvent } from "./game-data.mjs?v=20260824-r8";
 import {
   clearLocalGame,
@@ -38,9 +46,9 @@ import {
   loadLocalGame,
   requestAgnesResolution,
   requestProviderStatus,
-  saveLocalGame,
   streamAgnesEvent,
-} from "./game-client.mjs?v=20260824-r8";
+} from "./game-client.mjs?v=20260830-p1b";
+import { createIndexedDbSaveRepository } from "./indexeddb-save-repository.mjs?v=20260830-p1a";
 import {
   canResumeMainline,
   formatCaveFacilityLabel,
@@ -56,6 +64,8 @@ import { shouldUseCompactViewport } from "./viewport-rules.mjs?v=20260824-r7";
 if ("scrollRestoration" in history) history.scrollRestoration = "manual";
 window.scrollTo({ top: 0, left: 0 });
 const apiMode = document.querySelector('meta[name="destiny-api-mode"]')?.content || "local";
+const playerAgnesTransportPolicy = apiMode === "player-key" ? "browser-fetch" : "auto";
+const supportsPlayerAgnesSettings = ["local", "player-key"].includes(apiMode);
 let apiBaseUrl = "";
 try {
   apiBaseUrl = configureGameApiBase(
@@ -115,8 +125,8 @@ const ids = [
   "relationship-list", "npc-list", "npc-ecology-list", "event-source", "event-title", "event-scene", "danger-mark",
   "choice-list", "resolution-view", "resolution-status", "resolution-narrative", "resolution-npc-reaction",
   "resolution-consequence", "resolution-next-clue", "resolution-error", "result-copy", "next-event", "event-loading", "streaming-preview",
-  "provider-error", "provider-error-message", "offline-continue", "free-action-form", "free-action-input",
-  "system-panel", "system-panel-content", "system-action-list", "combat-forecast", "return-to-mainline",
+  "provider-error", "provider-error-message", "retry-generation", "offline-continue", "free-action-form", "free-action-input",
+  "system-panel", "system-panel-content", "system-action-list", "combat-forecast", "return-to-mainline", "npc-dossier", "retry-resolution",
   "command-drawer", "command-menu", "world-latest", "unrest-bar", "unrest-value", "chronicle-list", "chronicle-count",
   "mobile-player-status", "mobile-player-name", "mobile-player-realm", "mobile-player-location", "mobile-player-abnormal",
   "mobile-vitality-bar", "mobile-vitality-value", "mobile-spirit-bar", "mobile-spirit-value",
@@ -125,8 +135,9 @@ const ids = [
   "export-save", "import-save", "request-reset", "reset-confirmation", "cancel-reset", "confirm-reset",
   "open-agnes-settings-intro", "open-agnes-settings", "save-drawer-view", "agnes-settings-view",
   "back-from-agnes-settings", "agnes-key-input", "toggle-agnes-key-visibility", "remember-agnes-key",
-  "save-agnes-settings", "test-agnes-connection", "request-clear-agnes-key", "clear-agnes-confirmation",
-  "cancel-clear-agnes-key", "confirm-clear-agnes-key", "agnes-settings-status",
+  "save-agnes-settings", "test-agnes-connection", "test-taptap-connection", "request-clear-agnes-key", "clear-agnes-confirmation",
+  "cancel-clear-agnes-key", "confirm-clear-agnes-key", "agnes-settings-status", "agnes-transport-status",
+  "agnes-connection-diagnostic",
   "end-screen", "end-summary", "restart-from-end", "fate-seal", "toast",
 ];
 const elements = Object.fromEntries(ids.map((id) => [id, document.getElementById(id)]));
@@ -151,22 +162,51 @@ const PROVIDER_MESSAGES = {
   authentication: "Key 无效或没有调用权限。没有切换其他模型。",
   provider_uncertain: "请求超时，Provider 是否完成生成尚不确定。为避免重复消耗，没有自动重试。",
   rate_limited: "Agnes 当前请求过多。没有自动重试。",
-  network_unavailable: "浏览器无法连接本地游戏服务。请确认 Node 服务仍在运行。",
+  network_unavailable: "连接中断，未收到完整的 Agnes 响应。请检查网络后手动重试。",
   invalid_request: "Agnes 拒绝了本次请求，请检查服务配置。",
   provider_error: "Agnes 服务暂时不可用。没有切换其他模型。",
 };
+
+function formatProviderFailure(error) {
+  const base = PROVIDER_MESSAGES[error?.code] || PROVIDER_MESSAGES.provider_error;
+  const diagnostic = formatAgnesTransportDiagnostic(error);
+  return diagnostic ? `${base} ${diagnostic}` : base;
+}
 
 let gameState = null;
 let currentEvent = null;
 let currentEventTurn = null;
 let savedGame = null;
+const saveRepository = createIndexedDbSaveRepository();
+
+function persistGameState(state) {
+  savedGame = state;
+  void saveRepository.save(state).catch(() => showToast("IndexedDB 存档失败，请及时导出命簿"));
+}
 let providerConfigured = false;
 let useAgnes = false;
 let playerAgnesModule = null;
 let playerAgnesCredential = "";
 let playerAgnesVerified = false;
 let isGenerating = false;
+let lastGenerationAction = "";
+let pendingSystemView = null;
 let toastTimer = 0;
+
+function renderAgnesTransportStatus(transportName = "") {
+  const detected = transportName
+    || playerAgnesModule?.getPlayerAgnesTransport?.({ transportPolicy: playerAgnesTransportPolicy }).name
+    || "browser.fetch";
+  const label = apiMode === "player-key" && detected === "browser.fetch"
+    ? "browser.fetch（TapTap H5）"
+    : detected;
+  elements["agnes-transport-status"].textContent = `当前 Transport：${label}`;
+}
+
+function setAgnesConnectionDiagnostic(message = "") {
+  elements["agnes-connection-diagnostic"].textContent = message;
+  elements["agnes-connection-diagnostic"].hidden = !message;
+}
 
 function randomSeed() {
   const buffer = new Uint32Array(1);
@@ -208,16 +248,15 @@ function updateProviderUi() {
 }
 
 async function detectProvider() {
-  if (apiMode === "player-key") {
+  if (supportsPlayerAgnesSettings) {
     try {
-      playerAgnesModule = await import("./player-agnes.mjs?v=20260825-player-key");
+      playerAgnesModule = await import("./player-agnes.mjs?v=20260830-p1a");
       const { loadPlayerAgnesKey } = playerAgnesModule;
       const stored = loadPlayerAgnesKey({ sessionStorage, localStorage });
       playerAgnesCredential = stored.key;
-      providerConfigured = configurePlayerAgnesDirect(playerAgnesModule, playerAgnesCredential);
-      useAgnes = providerConfigured;
       elements["agnes-key-input"].value = playerAgnesCredential;
       elements["remember-agnes-key"].checked = stored.remember;
+      renderAgnesTransportStatus();
     } catch {
       playerAgnesModule = null;
       playerAgnesCredential = "";
@@ -225,6 +264,12 @@ async function detectProvider() {
       useAgnes = false;
       configurePlayerAgnesDirect(null, "");
     }
+  }
+  if (apiMode === "player-key" || playerAgnesCredential) {
+    providerConfigured = configurePlayerAgnesDirect(playerAgnesModule, playerAgnesCredential, {
+      transportPolicy: playerAgnesTransportPolicy,
+    });
+    useAgnes = providerConfigured;
     updateProviderUi();
     return;
   }
@@ -245,13 +290,20 @@ async function detectProvider() {
   updateProviderUi();
 }
 
-function restoreSaveCandidate() {
+async function restoreSaveCandidate() {
   try {
-    savedGame = loadLocalGame(localStorage);
+    savedGame = await saveRepository.load();
+    if (!savedGame) {
+      const legacySave = loadLocalGame(localStorage);
+      if (legacySave) {
+        await saveRepository.save(legacySave);
+        clearLocalGame(localStorage);
+        savedGame = legacySave;
+      }
+    }
   } catch {
-    clearLocalGame(localStorage);
     savedGame = null;
-    showToast("本地存档已损坏，未加载");
+    showToast("IndexedDB 存档不可用，未加载本地命簿");
   }
   elements["intro-screen"].classList.toggle("has-save", Boolean(savedGame));
   if (!savedGame) {
@@ -487,14 +539,21 @@ function renderState() {
   elements["npc-ecology-list"].replaceChildren(...world.npcs.map((npc) => {
     const item = document.createElement("div");
     item.className = "npc-item";
-    const name = document.createElement("strong");
+    const name = document.createElement("button");
+    name.type = "button";
+    name.className = "npc-dossier-trigger";
+    name.addEventListener("click", () => {
+      renderEcologyPanel();
+      showNpcDossier(npc.id);
+    });
     const status = document.createElement("span");
     const detail = document.createElement("small");
-    name.textContent = `${npc.name} · ${npc.gender}`;
+    const dossier = getNpcDossier(gameState, npc.id);
+    name.textContent = `${npc.name} · ${npc.gender} · ${npc.species || "人族"}`;
     status.textContent = npc.alive ? "在世" : "已故";
     detail.textContent = npc.alive
-      ? `${npc.stage} · ${Math.floor(npc.ageMonths / 12)}岁 · ${npc.goal}`
-      : `${Math.floor(npc.ageMonths / 12)}岁终`;
+      ? `${dossier.realm} · ${Math.floor(npc.ageMonths / 12)}岁 · ${npc.goal}`
+      : `${dossier.realm} · ${Math.floor(npc.ageMonths / 12)}岁终 · 死因：${npc.deathCause || "未记"}`;
     item.append(name, status, detail);
     return item;
   }));
@@ -545,7 +604,11 @@ function renderEvent(event) {
   elements["danger-mark"].dataset.danger = event.danger;
   elements["danger-mark"].textContent = DANGER_LABELS[event.danger] || "未知";
 
-  const slips = event.choices.map((choice, index) => {
+  const displayChoices = event.choices.flatMap((choice) => {
+    if (event.kind !== "combat" || choice.action !== "fight") return [{ choice, skill: null }];
+    return getLearnedCombatSkills(gameState).map((skill) => ({ choice, skill }));
+  });
+  const slips = displayChoices.map(({ choice, skill }, index) => {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "choice-slip";
@@ -556,8 +619,8 @@ function renderEvent(event) {
     copy.className = "choice-copy";
     const label = document.createElement("strong");
     const hint = document.createElement("small");
-    label.textContent = choice.label;
-    hint.textContent = choice.hint;
+    label.textContent = skill ? `${skill.name}迎战` : choice.label;
+    hint.textContent = skill ? `${skill.type} · 熟练 ${skill.mastery} · 灵力 ${skill.spiritCost}` : choice.hint;
     copy.append(label, hint);
     const effects = document.createElement("span");
     effects.className = "choice-effects";
@@ -572,7 +635,7 @@ function renderEvent(event) {
       effects.append(effect);
     }
     button.append(number, copy, effects);
-    button.addEventListener("click", () => commitChoice(choice.id));
+    button.addEventListener("click", () => commitChoice(choice.id, skill?.id));
     return button;
   });
   elements["choice-list"].replaceChildren(...slips);
@@ -594,7 +657,7 @@ function formatLocalDelta(stateDelta) {
   return labels.join("；") || "本地数值没有变化";
 }
 
-function renderResolution(pendingResolution, { isAwaiting = false, rawContent = "" } = {}) {
+function renderResolution(pendingResolution, { isAwaiting = false, rawContent = "", providerError = null } = {}) {
   isGenerating = isAwaiting;
   setMobilePlayerStatusVisible(false);
   document.querySelector(".event-panel").classList.add("resolution-mode");
@@ -605,7 +668,9 @@ function renderResolution(pendingResolution, { isAwaiting = false, rawContent = 
   elements["free-action-form"].hidden = true;
   elements["command-drawer"].hidden = true;
   elements["system-panel"].hidden = true;
-  elements["event-loading"].hidden = true;
+  const pendingUi = deriveAgnesPendingUi({ isAwaiting, isDead: gameState.meta.status === "dead" });
+  elements["event-loading"].hidden = !pendingUi.isLoadingVisible;
+  elements["event-loading"].querySelector("span").textContent = pendingUi.loadingText;
   elements["streaming-preview"].hidden = true;
   elements["provider-error"].hidden = true;
   elements["resolution-view"].hidden = false;
@@ -625,15 +690,17 @@ function renderResolution(pendingResolution, { isAwaiting = false, rawContent = 
   const hasFailure = provider.status === "failed" || (provider.status === "pending" && !isAwaiting);
   elements["resolution-error"].hidden = !hasFailure;
   elements["resolution-error"].textContent = provider.status === "failed"
-    ? `AI 主持失败：${PROVIDER_MESSAGES[provider.error] || PROVIDER_MESSAGES.provider_error} 本地结果已保留。`
+    ? `AI 主持失败：${formatProviderFailure(providerError || { code: provider.error })} 本地结果已保留。`
     : "上一次 AI 主持结果不确定，没有自动重试；本地结果已保留。";
+  elements["retry-resolution"].hidden = !hasFailure || !providerConfigured;
+  elements["retry-resolution"].disabled = isAwaiting;
   elements["next-event"].disabled = isAwaiting;
-  elements["next-event"].hidden = gameState.meta.status === "dead";
+  elements["next-event"].hidden = !pendingUi.isContinueVisible;
   if (!isAwaiting && gameState.meta.status === "active") elements["next-event"].focus({ preventScroll: true });
   resetHorizontalViewportDrift();
 }
 
-async function settleAndNarrate({ choiceId = "", playerAction = "" } = {}) {
+async function settleAndNarrate({ choiceId = "", playerAction = "", skillId = "" } = {}) {
   if (isGenerating || gameState?.meta?.pendingResolution || !currentEvent) return;
   const choice = currentEvent?.choices.find((candidate) => candidate.id === choiceId);
   if (!choice && !playerAction) return;
@@ -645,7 +712,7 @@ async function settleAndNarrate({ choiceId = "", playerAction = "" } = {}) {
   };
   if (currentEvent?.kind === "combat") {
     if (choice) {
-      const combat = resolveCombatEncounterChoice(gameState, currentEvent, choiceId);
+      const combat = resolveCombatEncounterChoice(gameState, currentEvent, choiceId, { skillId });
       resolvedState = combat.state;
       localOutcome = { status: combat.outcome.status, summary: combat.outcome.summary };
     }
@@ -655,13 +722,13 @@ async function settleAndNarrate({ choiceId = "", playerAction = "" } = {}) {
     resolvedState,
     localOutcome,
   });
-  saveLocalGame(localStorage, gameState);
+  persistGameState(gameState);
   renderState();
   strikeSeal();
   renderResolution(gameState.meta.pendingResolution, { isAwaiting: providerConfigured });
   if (!providerConfigured) {
     gameState = failEventResolution(gameState, "agnes_not_configured");
-    saveLocalGame(localStorage, gameState);
+    persistGameState(gameState);
     renderResolution(gameState.meta.pendingResolution);
     return;
   }
@@ -677,7 +744,7 @@ async function settleAndNarrate({ choiceId = "", playerAction = "" } = {}) {
     const resolution = result.resolution || createSafeResolutionFallback(gameState.meta.pendingResolution);
     gameState = completeEventResolution(gameState, resolution);
     setProviderChip(elements["provider-status"], "online", "Agnes 主持完成");
-    saveLocalGame(localStorage, gameState);
+    persistGameState(gameState);
     renderResolution(gameState.meta.pendingResolution, {
       rawContent: result.resolution ? "" : result.rawContent,
     });
@@ -686,14 +753,53 @@ async function settleAndNarrate({ choiceId = "", playerAction = "" } = {}) {
     if (gameState.meta.pendingResolution?.id !== resolutionId) return;
     gameState = failEventResolution(gameState, error.code || "provider_error");
     setProviderChip(elements["provider-status"], "error", "AI 主持失败");
+    persistGameState(gameState);
+    renderResolution(gameState.meta.pendingResolution, { providerError: error });
+    return;
   }
-  saveLocalGame(localStorage, gameState);
+  persistGameState(gameState);
   renderResolution(gameState.meta.pendingResolution);
 }
 
-function commitChoice(choiceId) {
+async function retryPendingResolution() {
+  if (isGenerating || !providerConfigured || !gameState?.meta?.pendingResolution) return;
+  const resolutionId = gameState.meta.pendingResolution.id;
+  renderResolution(gameState.meta.pendingResolution, { isAwaiting: true });
+  try {
+    let rawContent = "";
+    const result = await requestAgnesResolution(fetch, gameState, (delta) => {
+      rawContent += delta;
+      elements["resolution-narrative"].textContent = rawContent;
+    });
+    if (gameState.meta.pendingResolution?.id !== resolutionId) return;
+    gameState = completeEventResolution(
+      gameState,
+      result.resolution || createSafeResolutionFallback(gameState.meta.pendingResolution),
+    );
+    setProviderChip(elements["provider-status"], "online", "Agnes 主持完成");
+  } catch (error) {
+    if (gameState.meta.pendingResolution?.id !== resolutionId) return;
+    gameState = failEventResolution(gameState, error.code || "provider_error");
+    setProviderChip(elements["provider-status"], "error", "AI 主持失败");
+    persistGameState(gameState);
+    renderResolution(gameState.meta.pendingResolution, { providerError: error });
+    return;
+  }
+  persistGameState(gameState);
+  renderResolution(gameState.meta.pendingResolution);
+}
+
+function commitChoice(choiceId, skillId = "") {
+  if (currentEvent?.agentCommitted && choiceId === "continue-agent-turn") {
+    currentEvent = null;
+    currentEventTurn = null;
+    void loadNextEvent();
+    return;
+  }
   if (currentEvent?.displayOnly) {
-    if (choiceId === "use-offline-engine") {
+    if (choiceId === "retry-agnes-generation") {
+      void retryAgnesGeneration(loadNextEvent, lastGenerationAction);
+    } else if (choiceId === "use-offline-engine") {
       useAgnes = false;
       updateProviderUi();
       renderEvent(chooseOfflineEvent(gameState));
@@ -702,7 +808,7 @@ function commitChoice(choiceId) {
     }
     return;
   }
-  void settleAndNarrate({ choiceId });
+  void settleAndNarrate({ choiceId, skillId });
 }
 
 function readPartialJsonString(source, field) {
@@ -741,6 +847,7 @@ function renderStreamDraft(raw) {
 
 async function loadNextEvent(action = "") {
   if (isGenerating) return;
+  lastGenerationAction = action;
   setMobilePlayerStatusVisible(false);
   currentEvent = null;
   currentEventTurn = null;
@@ -778,6 +885,12 @@ async function loadNextEvent(action = "") {
       rawDraft += delta;
       renderStreamDraft(rawDraft);
     });
+    if (event.agentGameState) {
+      gameState = importGame(JSON.stringify(event.agentGameState));
+      delete event.agentGameState;
+      persistGameState(gameState);
+      renderState();
+    }
     renderEvent(event);
     setProviderChip(elements["provider-status"], "online", "Agnes 流式推演");
   } catch (error) {
@@ -785,7 +898,7 @@ async function loadNextEvent(action = "") {
     elements["event-loading"].hidden = true;
     elements["streaming-preview"].hidden = true;
     elements["provider-error"].hidden = false;
-    elements["provider-error-message"].textContent = PROVIDER_MESSAGES[error.code] || PROVIDER_MESSAGES.provider_error;
+    elements["provider-error-message"].textContent = formatProviderFailure(error);
     setProviderChip(elements["provider-status"], "error", "Agnes 调用失败");
   }
 }
@@ -796,10 +909,19 @@ function percent(value) {
 
 function commitLocalState(nextState, message) {
   gameState = nextState;
-  saveLocalGame(localStorage, gameState);
+  persistGameState(gameState);
   renderState();
   if (message) showToast(message);
   if (gameState.meta.status === "dead") showEndScreen();
+}
+
+function preserveSystemView(run) {
+  const activeCategory = elements["system-panel"].querySelector(".system-category-tabs button.active")?.dataset.systemCategory;
+  pendingSystemView = {
+    category: activeCategory || "",
+    scrollTop: document.querySelector(".event-panel")?.scrollTop || 0,
+  };
+  run();
 }
 
 function renderSystemPanel(title, scene, rows = [], actions = [], forecast = "") {
@@ -817,24 +939,66 @@ function renderSystemPanel(title, scene, rows = [], actions = [], forecast = "")
   elements["danger-mark"].dataset.danger = "low";
   elements["danger-mark"].textContent = "系统";
 
-  const cards = rows.map(([label, value]) => {
+  const categories = [...new Set([
+    ...rows.map(([, , category = "总览"]) => category),
+    ...actions.map(({ category = "总览" }) => category),
+  ])];
+  const tabs = document.createElement("nav");
+  tabs.className = "system-category-tabs";
+  tabs.setAttribute("aria-label", `${title}分类`);
+  const existingTabs = elements["system-panel"].querySelector(".system-category-tabs");
+  if (existingTabs) existingTabs.remove();
+
+  elements["npc-dossier"].hidden = true;
+  const cards = rows.map(([label, value, category = "总览", onSelect = null, rowActions = []]) => {
     const card = document.createElement("div");
-    card.className = "system-card";
-    const heading = document.createElement("strong");
+    card.className = `system-card${rowActions.length ? " has-row-actions" : ""}`;
+    card.setAttribute("data-system-category", category);
+    const content = document.createElement("div");
+    content.className = "system-card-copy";
+    const heading = onSelect ? document.createElement("button") : document.createElement("strong");
+    if (onSelect) {
+      heading.type = "button";
+      heading.className = "npc-dossier-trigger";
+      heading.addEventListener("click", onSelect);
+    }
     const copy = document.createElement("span");
     heading.textContent = label;
     copy.textContent = String(value);
-    card.append(heading, copy);
+    content.append(heading, copy);
+    card.append(content);
+    if (rowActions.length) {
+      const actionGroup = document.createElement("div");
+      actionGroup.className = "system-row-actions";
+      for (const action of rowActions) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = action.label;
+        if (action.hint) button.title = action.hint;
+        button.disabled = action.disabled === true;
+        button.addEventListener("click", () => {
+          try {
+            preserveSystemView(action.run);
+          } catch (error) {
+            pendingSystemView = null;
+            showToast(error.message || "本地规则拒绝了这次行动");
+          }
+        });
+        actionGroup.append(button);
+      }
+      card.append(actionGroup);
+    }
     return card;
   });
   elements["system-panel-content"].replaceChildren(...cards);
   elements["combat-forecast"].hidden = !forecast;
   elements["combat-forecast"].textContent = forecast;
 
-  const buttons = actions.map(({ label, hint = "", run }) => {
+  const buttons = actions.map(({ label, hint = "", category = "总览", run }) => {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "system-action";
+    button.setAttribute("data-system-category", category);
     const heading = document.createElement("strong");
     heading.textContent = label;
     button.append(heading);
@@ -845,16 +1009,44 @@ function renderSystemPanel(title, scene, rows = [], actions = [], forecast = "")
     }
     button.addEventListener("click", () => {
       try {
-        run();
+        preserveSystemView(run);
       } catch (error) {
+        pendingSystemView = null;
         showToast(error.message || "本地规则拒绝了这次行动");
       }
     });
     return button;
   });
   elements["system-action-list"].replaceChildren(...buttons);
+  const showCategory = (category) => {
+    [...cards, ...buttons].forEach((item) => { item.hidden = item.dataset.systemCategory !== category; });
+    tabs.querySelectorAll("button").forEach((button) => {
+      const selected = button.dataset.systemCategory === category;
+      button.classList.toggle("active", selected);
+      button.setAttribute("aria-selected", String(selected));
+    });
+  };
+  for (const category of categories) {
+    const tab = document.createElement("button");
+    tab.type = "button";
+    tab.setAttribute("data-system-category", category);
+    tab.textContent = category;
+    tab.addEventListener("click", () => showCategory(category));
+    tabs.append(tab);
+  }
+  elements["system-panel"].insertBefore(tabs, elements["system-panel-content"]);
+  const initialCategory = categories.includes(pendingSystemView?.category) ? pendingSystemView.category : categories[0];
+  if (initialCategory) showCategory(initialCategory);
   elements["system-panel"].hidden = false;
   elements["event-title"].focus({ preventScroll: true });
+  const viewToRestore = pendingSystemView;
+  if (viewToRestore) {
+    requestAnimationFrame(() => {
+      const eventPanel = document.querySelector(".event-panel");
+      if (eventPanel) eventPanel.scrollTop = viewToRestore.scrollTop;
+      if (pendingSystemView === viewToRestore) pendingSystemView = null;
+    });
+  }
   resetHorizontalViewportDrift();
 }
 
@@ -922,11 +1114,13 @@ function renderBreakthroughPanel() {
     for (const option of options) {
       rows.push([
         option.name,
-        `材料 ${option.materialLabels.join("、")} · 成功 ${percent(option.successRate)} · 雷劫 ${percent(option.thunderRisk)} · 心魔 ${percent(option.heartDemonRisk)} · 失败：${option.failureConsequence}`,
+        `持有：${option.heldMaterialLabels.join("、")} · 缺少：${option.missingMaterialLabels.join("、") || "无"} · 成功 ${percent(option.successRate)} · 雷劫 ${percent(option.thunderRisk)} · 心魔 ${percent(option.heartDemonRisk)} · 失败：${option.failureConsequence}`,
+        option.name,
       ]);
       actions.push({
         label: `选择${option.name}`,
         hint: `成长 ${option.growth}；材料会在正式冲关时消耗`,
+        category: option.name,
         run: () => {
           const result = attemptBreakthrough(gameState, option.route);
           if (result.outcome.status !== "blocked") commitLocalState(result.state);
@@ -950,49 +1144,48 @@ function renderInventoryPanel() {
   const rows = Object.entries(gameState.player.inventory).map(([itemId, quantity]) => [
     ITEM_CATALOG[itemId]?.name || itemId,
     `持有 ${quantity}`,
+    ({ pill: "丹药", equipment: "装备", consumable: "消耗品" }[ITEM_CATALOG[itemId]?.category] || "材料"),
   ]);
-  rows.unshift(["元石", gameState.player.resources.spiritStones]);
+  rows.unshift(["元石", gameState.player.resources.spiritStones, "货币"]);
   renderSystemPanel("背包与材料", "材料是突破、技艺、洞府和交易的真实输入；不足时本地规则会拒绝执行。", rows);
 }
 
 function renderTechniquePanel() {
   const build = gameState.player.techniqueBuild;
-  const actions = [];
-  for (const technique of build.known) {
-    if (technique !== build.main) {
-      actions.push({
-        label: `主修 ${technique}`,
-        run: () => {
-          commitLocalState(equipTechnique(gameState, technique, "main"), "主功法已更换");
-          renderTechniquePanel();
-        },
-      });
-      if (!build.supports.includes(technique)) {
-        actions.push({
-          label: `辅助 ${technique}`,
+  const rows = (gameState.player.knowledge || []).map((knowledge) => {
+    const buildName = knowledge.name.replace(/^《|》$/gu, "");
+    const rowActions = knowledge.category === "功法" && build.known.includes(buildName) && buildName !== build.main
+      ? [
+        {
+          label: "主修",
           run: () => {
-            commitLocalState(equipTechnique(gameState, technique, "support"), "辅助功法已装备");
+            commitLocalState(equipTechnique(gameState, buildName, "main"), "主功法已更换");
             renderTechniquePanel();
           },
-        });
-      }
-    }
-  }
+        },
+        ...(!build.supports.includes(buildName) ? [{
+          label: "辅助",
+          run: () => {
+            commitLocalState(equipTechnique(gameState, buildName, "support"), "辅助功法已装备");
+            renderTechniquePanel();
+          },
+        }] : []),
+      ]
+      : [];
+    return [knowledge.name, `${knowledge.depth || "未入门"} · 熟练 ${knowledge.mastery ?? 0}`, knowledge.category || "功法", null, rowActions];
+  });
+  rows.unshift(["当前构筑", `主修 ${build.main || "未设"} · 辅助 ${build.supports.join("、") || "未设"}`, "当前构筑"]);
   renderSystemPanel(
     "功法构筑",
-    "一部主功法决定修炼系数，最多两部辅助功法；未习得的功法不能凭空装备。",
-    [
-      ["已习得", build.known.join("、")],
-      ["主功法", build.main || "未设"],
-      ["辅助槽", build.supports.join("、") || "未设"],
-    ],
-    actions,
+    "主线实际习得的功法、武技、阵法、身法与技艺会同步归档；修炼深度按熟练度显示。",
+    rows,
   );
 }
 
 function renderCraftPanel(craftExecutor = practiceCraft) {
   const actions = Object.entries(CRAFT_RECIPES).map(([craft, recipe]) => ({
     label: `研习${recipe.name}`,
+    category: recipe.name,
     hint: `材料 ${Object.entries(recipe.materials).map(([itemId, quantity]) => `${ITEM_CATALOG[itemId].name}×${quantity}`).join("、")}；耗时一月`,
     run: () => {
       const result = craftExecutor(gameState, craft);
@@ -1003,6 +1196,7 @@ function renderCraftPanel(craftExecutor = practiceCraft) {
   const rows = Object.entries(gameState.player.crafts).map(([craft, skill]) => [
     CRAFT_RECIPES[craft].name,
     `${skill.level}阶 · 熟练 ${skill.experience}`,
+    CRAFT_RECIPES[craft].name,
   ]);
   renderSystemPanel("修仙六艺", "炼丹、炼器、符箓、阵法、御兽、灵植都有材料消耗、熟练度和成败判定。", rows, actions);
 }
@@ -1042,38 +1236,52 @@ function renderSectPanel() {
   renderSystemPanel(
     "宗门生涯",
     "宗门职位由贡献驱动；任务真实推进一个月，并同步 NPC 生态。",
-    [["宗门", sect.name], ["职位", sect.position], ["贡献", sect.contribution], ["宗门声望", sect.reputation]],
+    [
+      ["宗门", sect.name, "当前宗门"],
+      ["职位", sect.position, "当前宗门"],
+      ["贡献", sect.contribution, "当前宗门"],
+      ["宗门声望", sect.reputation, "当前宗门"],
+      ...(sect.history || []).slice().reverse().map((entry) => [entry.record, `${entry.year}年${entry.month}月`, "主线记录"]),
+    ],
     actions,
   );
 }
 
 function renderCavePanel() {
   const cave = gameState.player.cave;
+  const requirementText = (requirement) => requirement.isMaxLevel
+    ? "已达上限"
+    : requirement.costs.map((cost) => `${cost.name} ${cost.required}（持有${cost.held}/缺${cost.missing}）`).join(" · ");
+  const auraRequirement = getCaveUpgradeRequirement(gameState, "aura");
   const rows = [
-    ["洞府灵气", `${cave.auraLevel}阶`],
-    ...Object.entries(cave.facilities).map(([facility, level]) => [formatCaveFacilityLabel(facility), `${level}阶`]),
-    ["灵田", cave.crop ? `尚需照料 ${cave.crop.monthsRemaining} 月` : "空闲"],
-  ];
-  const actions = [
-    {
-      label: "提升洞府灵气",
-      hint: "消耗元石与玄铁矿，提高修炼系数",
+    ["洞府灵气", `${cave.auraLevel}阶 · 升级需要 ${requirementText(auraRequirement)}`, "修炼区", null, [{
+      label: "升级",
+      hint: requirementText(auraRequirement),
+      disabled: auraRequirement.isMaxLevel,
       run: () => {
         commitLocalState(upgradeCave(gameState, "aura"), "洞府灵气已提升");
         renderCavePanel();
       },
-    },
-    ...Object.keys(cave.facilities).map((facility) => ({
-      label: `升级${formatCaveFacilityLabel(facility)}`,
-      hint: "消耗元石与玄铁矿",
-      run: () => {
-        commitLocalState(upgradeCave(gameState, facility), "洞府设施已升级");
-        renderCavePanel();
-      },
-    })),
+    }]],
+    ...Object.entries(cave.facilities).map(([facility, level]) => {
+      const requirement = getCaveUpgradeRequirement(gameState, facility);
+      return [formatCaveFacilityLabel(facility), `${level}阶 · 升级需要 ${requirementText(requirement)}`, "设施区", null, [{
+        label: "升级",
+        hint: requirementText(requirement),
+        disabled: requirement.isMaxLevel,
+        run: () => {
+          commitLocalState(upgradeCave(gameState, facility), "洞府设施已升级");
+          renderCavePanel();
+        },
+      }]];
+    }),
+    ["灵田", cave.crop ? `尚需照料 ${cave.crop.monthsRemaining} 月` : "空闲", "灵田区"],
+  ];
+  const actions = [
     cave.crop
       ? {
         label: "照料灵植一月",
+        category: "灵田区",
         run: () => {
           const result = tendCaveCrop(gameState);
           commitLocalState(result.state, result.outcome.status === "harvested" ? `收获灵药 ${result.outcome.harvest} 株` : "灵植继续生长");
@@ -1082,6 +1290,7 @@ function renderCavePanel() {
       }
       : {
         label: "播种灵植",
+        category: "灵田区",
         hint: "消耗一枚灵植种子",
         run: () => {
           commitLocalState(plantCaveCrop(gameState), "灵植已经播种");
@@ -1094,22 +1303,22 @@ function renderCavePanel() {
 
 function renderMarketPanel() {
   const prices = gameState.world.market.prices;
-  const actions = [];
   const rows = Object.entries(prices).map(([itemId, price]) => {
     const item = ITEM_CATALOG[itemId];
-    actions.push({
-      label: `买入 ${item.name}`,
+    const category = ({ pill: "丹药", equipment: "装备", consumable: "消耗品" }[item.category] || "材料");
+    const rowActions = [{
+      label: "买入",
       hint: `${price} 元石 / 件`,
       run: () => {
         const result = buyMarketItem(gameState, itemId);
         commitLocalState(result.state, `买入${result.item.name}，花费 ${result.cost} 元石`);
         renderMarketPanel();
       },
-    });
+    }];
     if ((gameState.player.inventory[itemId] ?? 0) > 0) {
-      actions.push({
-        label: `卖出 ${item.name}`,
-        hint: `回收价 ${Math.floor(price * 0.6)} 元石`,
+      rowActions.push({
+        label: "卖出",
+        hint: `回收价 ${getMarketSellPrice(gameState, itemId)} 元石`,
         run: () => {
           const result = sellMarketItem(gameState, itemId);
           commitLocalState(result.state, `卖出${result.item.name}，获得 ${result.revenue} 元石`);
@@ -1117,21 +1326,22 @@ function renderMarketPanel() {
         },
       });
     }
-    return [item.name, `市价 ${price} · 持有 ${gameState.player.inventory[itemId] ?? 0}`];
+    return [item.name, `买入价 ${price} · 卖出价 ${getMarketSellPrice(gameState, itemId)} · 持有 ${gameState.player.inventory[itemId] ?? 0}`, category, null, rowActions];
   });
-  rows.unshift(["随身元石", gameState.player.resources.spiritStones]);
-  renderSystemPanel("坊市交易", "坊市买卖严格结算元石与库存，卖出价为市价六成。", rows, actions);
+  rows.unshift(["随身元石", gameState.player.resources.spiritStones, "货币"]);
+  renderSystemPanel("坊市交易", "每项资产同时标注买入价与卖出价，交易按钮固定在该项右侧。", rows);
 }
 
 function renderRelationshipPanel() {
   const livingNpcs = gameState.world.npcs.filter((npc) => npc.alive);
   const rows = livingNpcs.map((npc) => {
     const relation = gameState.player.relationships.find((candidate) => candidate.npcId === npc.id);
-    return [npc.name, relation ? `${relation.bond} · ${relation.stage} · 好感 ${relation.affection}` : "陌生 · 好感 0"];
+    return [npc.name, relation ? `${relation.bond} · ${relation.stage} · 好感 ${relation.affection}` : "主线人物 · 初识 · 好感 0", relation?.bond || "主线人物"];
   });
   const actions = livingNpcs.flatMap((npc) => [
     {
       label: `结交 ${npc.name}`,
+      category: gameState.player.relationships.find((entry) => entry.npcId === npc.id)?.bond || "主线人物",
       hint: "友情路线 · 耗时一月",
       run: () => {
         const result = interactWithNpc(gameState, npc.id, { kind: "friendship" });
@@ -1141,6 +1351,7 @@ function renderRelationshipPanel() {
     },
     {
       label: `追求 ${npc.name}`,
+      category: gameState.player.relationships.find((entry) => entry.npcId === npc.id)?.bond || "主线人物",
       hint: "全性向情缘路线 · 耗时一月",
       run: () => {
         const result = interactWithNpc(gameState, npc.id, { kind: "romance" });
@@ -1153,15 +1364,40 @@ function renderRelationshipPanel() {
 }
 
 function renderEcologyPanel() {
-  const rows = gameState.world.npcs.map((npc) => [
-    npc.name,
-    npc.alive
-      ? `${npc.stage} · ${Math.floor(npc.ageMonths / 12)}岁 · 修为 ${npc.cultivation} · 羁绊 ${npc.bonds.length}`
-      : `${Math.floor(npc.ageMonths / 12)}岁终 · 已退出月度生态`,
-  ]);
+  const rows = gameState.world.npcs.map((npc) => {
+    const dossier = getNpcDossier(gameState, npc.id);
+    return [
+      `${npc.name} · ${npc.gender} · ${npc.species || "人族"}`,
+      npc.alive
+        ? `${dossier.realm} · ${Math.floor(npc.ageMonths / 12)}岁 · 修为 ${npc.cultivation} · 羁绊 ${npc.bonds.length}`
+        : `${dossier.realm} · ${Math.floor(npc.ageMonths / 12)}岁终 · 已故 · 死因：${npc.deathCause || "未记"}`,
+      npc.alive ? "在世" : "已故",
+      () => showNpcDossier(npc.id),
+    ];
+  });
   const latest = gameState.world.ecologyLog.slice(-6).map(formatEcologyLogEntry).join("；");
-  if (latest) rows.push(["最近生态", latest]);
+  if (latest) rows.push(["最近生态", latest, "世界记录"]);
   renderSystemPanel("NPC 月度生态", "每次时间推进，NPC 都会独立增长年龄与修为，并可能突破、失败、结缘或死亡。", rows);
+}
+
+function showNpcDossier(npcId) {
+  const npc = getNpcDossier(gameState, npcId);
+  const heading = document.createElement("h3");
+  heading.textContent = `${npc.name} · ${npc.gender} · ${npc.species}`;
+  const status = document.createElement("p");
+  status.textContent = `${npc.realm} · ${npc.alive ? "在世" : `已故，死因：${npc.deathCause || "未记"}`} · 目标：${npc.goal}`;
+  const history = document.createElement("ol");
+  const entries = npc.interactions.length > 0
+    ? npc.interactions.map((interaction) => `${interaction.year}年${interaction.month}月：${interaction.summary}`)
+    : ["尚无已记录的直接交集。"];
+  history.replaceChildren(...entries.map((text) => {
+    const item = document.createElement("li");
+    item.textContent = text;
+    return item;
+  }));
+  elements["npc-dossier"].replaceChildren(heading, status, history);
+  elements["npc-dossier"].hidden = false;
+  elements["npc-dossier"].focus({ preventScroll: true });
 }
 
 function renderHelpPanel() {
@@ -1266,6 +1502,8 @@ function showDrawerView(view = "save") {
   elements["save-drawer-view"].hidden = isSettings;
   elements["agnes-settings-view"].hidden = !isSettings;
   if (isSettings) {
+    renderAgnesTransportStatus();
+    setAgnesConnectionDiagnostic();
     elements["clear-agnes-confirmation"].hidden = true;
     elements["agnes-settings-status"].textContent = providerConfigured
       ? (playerAgnesVerified ? "连接已验证，可启用 Agnes。" : "Key 已保存，尚未测试连接。")
@@ -1297,7 +1535,7 @@ function setAgnesSettingsStatus(message, state = "neutral") {
 
 function saveAgnesSettings() {
   if (!playerAgnesModule) {
-    setAgnesSettingsStatus("此构建未启用玩家 Key 设置。", "error");
+    setAgnesSettingsStatus("Agnes 模块加载失败，请更新游戏包后重试。", "error");
     return;
   }
   const candidate = elements["agnes-key-input"].value.trim();
@@ -1314,15 +1552,17 @@ function saveAgnesSettings() {
   });
   playerAgnesCredential = candidate;
   playerAgnesVerified = false;
-  providerConfigured = configurePlayerAgnesDirect(playerAgnesModule, playerAgnesCredential);
+  providerConfigured = configurePlayerAgnesDirect(playerAgnesModule, playerAgnesCredential, {
+    transportPolicy: playerAgnesTransportPolicy,
+  });
   useAgnes = providerConfigured;
   updateProviderUi();
   setAgnesSettingsStatus("已保存到当前浏览器，尚未测试连接。", "saved");
 }
 
-async function testAgnesSettingsConnection() {
+async function testAgnesSettingsConnection({ isTapTapH5Test = false } = {}) {
   if (!playerAgnesModule) {
-    setAgnesSettingsStatus("此构建未启用玩家 Key 设置。", "error");
+    setAgnesSettingsStatus("Agnes 模块加载失败，请更新游戏包后重试。", "error");
     return;
   }
   const candidate = elements["agnes-key-input"].value.trim();
@@ -1330,11 +1570,18 @@ async function testAgnesSettingsConnection() {
     setAgnesSettingsStatus("请先填写 Agnes Key。", "error");
     return;
   }
-  elements["test-agnes-connection"].disabled = true;
+  const testButton = isTapTapH5Test ? elements["test-taptap-connection"] : elements["test-agnes-connection"];
+  testButton.disabled = true;
+  setAgnesConnectionDiagnostic();
   setAgnesSettingsStatus("正在发起一次最小连接测试……", "checking");
   try {
-    const { testPlayerAgnesConnection } = playerAgnesModule;
-    await testPlayerAgnesConnection(fetch, candidate);
+    const { testPlayerAgnesConnection, getPlayerAgnesTransport } = playerAgnesModule;
+    const result = await testPlayerAgnesConnection(fetch, candidate, {
+      transportPolicy: playerAgnesTransportPolicy,
+    });
+    renderAgnesTransportStatus(
+      result.transport?.name || getPlayerAgnesTransport({ transportPolicy: playerAgnesTransportPolicy }).name,
+    );
     playerAgnesVerified = candidate === playerAgnesCredential;
     setAgnesSettingsStatus(
       playerAgnesVerified ? "连接成功，已保存的 Key 可用。" : "连接成功；如需用于游戏，请再点击保存。",
@@ -1342,14 +1589,17 @@ async function testAgnesSettingsConnection() {
     );
   } catch (error) {
     playerAgnesVerified = false;
+    const diagnostic = formatAgnesTransportDiagnostic(error);
+    renderAgnesTransportStatus(error?.transport?.name);
+    setAgnesConnectionDiagnostic(diagnostic);
     const safeMessage = error?.code === "authentication"
       ? "连接失败：Key 无效或没有调用权限。"
       : error?.code === "rate_limited"
         ? "连接失败：Agnes 当前请求过多。"
-        : "连接失败：无法完成 Agnes 请求。";
+        : `连接失败：无法完成 Agnes 请求。${diagnostic}`;
     setAgnesSettingsStatus(safeMessage, "error");
   } finally {
-    elements["test-agnes-connection"].disabled = false;
+    testButton.disabled = false;
     updateProviderUi();
   }
 }
@@ -1386,7 +1636,8 @@ function exportSave() {
 async function importSave(file) {
   try {
     const imported = importGame(await file.text());
-    saveLocalGame(localStorage, imported);
+    await saveRepository.save(imported);
+    savedGame = imported;
     closeDrawer();
     openGame(imported);
     showToast("命簿已导入");
@@ -1399,6 +1650,7 @@ async function importSave(file) {
 
 function resetGame() {
   clearLocalGame(localStorage);
+  void saveRepository.clear().catch(() => showToast("IndexedDB 存档清除失败"));
   gameState = null;
   currentEvent = null;
   currentEventTurn = null;
@@ -1454,7 +1706,7 @@ elements["character-form"].addEventListener("submit", (event) => {
       talent: String(form.get("talent")),
       stats: readStats(form),
     }, randomSeed());
-    saveLocalGame(localStorage, state);
+    persistGameState(state);
     openGame(state, getOpeningEvent(state));
   } catch (error) {
     elements["stat-budget-error"].textContent = error.message;
@@ -1465,7 +1717,7 @@ elements["continue-game"].addEventListener("click", () => openGame(savedGame));
 elements["next-event"].addEventListener("click", () => {
   if (!gameState?.meta?.pendingResolution) return;
   gameState = continueAfterResolution(gameState);
-  saveLocalGame(localStorage, gameState);
+  persistGameState(gameState);
   renderState();
   currentEvent = null;
   currentEventTurn = null;
@@ -1488,6 +1740,12 @@ elements["offline-continue"].addEventListener("click", () => {
   useAgnes = false;
   updateProviderUi();
   renderEvent(chooseOfflineEvent(gameState));
+});
+elements["retry-generation"].addEventListener("click", () => {
+  void retryAgnesGeneration(loadNextEvent, lastGenerationAction);
+});
+elements["retry-resolution"].addEventListener("click", () => {
+  void retryPendingResolution();
 });
 elements["engine-toggle"].addEventListener("click", () => {
   if (!providerConfigured) {
@@ -1514,6 +1772,9 @@ elements["toggle-agnes-key-visibility"].addEventListener("click", () => {
 });
 elements["save-agnes-settings"].addEventListener("click", saveAgnesSettings);
 elements["test-agnes-connection"].addEventListener("click", () => { void testAgnesSettingsConnection(); });
+elements["test-taptap-connection"].addEventListener("click", () => {
+  void testAgnesSettingsConnection({ isTapTapH5Test: true });
+});
 elements["request-clear-agnes-key"].addEventListener("click", () => {
   elements["clear-agnes-confirmation"].hidden = false;
 });
@@ -1544,5 +1805,9 @@ populateCharacterOptions();
 updateAgeOutput();
 updateCustomGenderField();
 updateStatBudget();
-restoreSaveCandidate();
-detectProvider();
+async function initializeApp() {
+  await restoreSaveCandidate();
+  await detectProvider();
+}
+
+void initializeApp();

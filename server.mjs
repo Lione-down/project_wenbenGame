@@ -18,11 +18,14 @@ import {
   parseAgnesResolution,
 } from "./lib/agnes-resolution-contract.mjs";
 import { sanitizeGameSnapshot } from "./lib/agnes-game-snapshot.mjs";
+import { AgnesProvider } from "./lib/agnes-provider.mjs";
+import { runEventAgentTurn } from "./public/game-agent-runtime.mjs";
 
 export { sanitizeGameSnapshot } from "./lib/agnes-game-snapshot.mjs";
 
 const MODULE_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PUBLIC_DIRECTORY = resolve(MODULE_DIRECTORY, "public");
+const DEFAULT_LIB_DIRECTORY = resolve(MODULE_DIRECTORY, "lib");
 const MAX_REQUEST_BYTES = 64 * 1024;
 const CONTENT_TYPES = {
   ".css": "text/css; charset=utf-8",
@@ -139,6 +142,7 @@ function parseFateProviderContent(content, snapshot) {
     return {
       event: parseAgnesEventWithRecovery(content, {
         allowedReferences: snapshotReferences(snapshot),
+        allowedSkillIds: snapshot.player.martialSkills.map((skill) => skill.id),
         deadNpcNames: snapshot.world.npcs.filter((npc) => !npc.alive).map((npc) => npc.name),
       }),
       rawContent: content,
@@ -188,6 +192,36 @@ async function requestAgnes({ apiKey, endpoint, fetchImpl, game, history, action
   const body = await response.json();
   const content = extractChatCompletionText(body);
   return parseFateProviderContent(content, snapshot);
+}
+
+async function requestAgnesAgentTurn({ apiKey, endpoint, fetchImpl, game, history, action, onDelta = () => {} }) {
+  return runEventAgentTurn({
+    provider: new AgnesProvider({
+      apiKey,
+      endpoint,
+      fetchImpl,
+      headers: { "X-Trace-ID": randomUUID() },
+      narrativeResponseMode: "json",
+    }),
+    gameState: game,
+    history,
+    action,
+    onDelta,
+  });
+}
+
+async function requestAgnesAgentResolution({ apiKey, endpoint, fetchImpl, game, resolution, onDelta = () => {} }) {
+  const snapshot = sanitizeGameSnapshot(game);
+  const payload = buildAgnesResolutionPayload(snapshot, resolution, { stream: false });
+  const provider = new AgnesProvider({
+    apiKey,
+    endpoint,
+    fetchImpl,
+    headers: { "X-Trace-ID": randomUUID() },
+    narrativeResponseMode: "json",
+  });
+  const { content } = await provider.streamNarrative({ messages: payload.messages, onDelta });
+  return parseResolutionProviderContent(content);
 }
 
 async function requestAgnesResolution({ apiKey, endpoint, fetchImpl, game, resolution }) {
@@ -413,6 +447,7 @@ export function createGameServer({
   endpoint = endpointFromEnvironment() || AGNES_CHAT_COMPLETIONS_URL,
   fetchImpl = globalThis.fetch,
   publicDirectory = DEFAULT_PUBLIC_DIRECTORY,
+  libDirectory = DEFAULT_LIB_DIRECTORY,
 } = {}) {
   const corsOrigins = parseAllowedOrigins(allowedOrigins);
   return createServer(async (request, response) => {
@@ -448,6 +483,27 @@ export function createGameServer({
         });
         if (!result.structured) console.warn("Agnes 内容合同漂移：event_contract_drift");
         sendJson(response, 200, result);
+      } catch (error) {
+        const classification = classifyRequestError(error);
+        sendJson(response, classification.status, { error: classification.code });
+      }
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/api/agent/resolution") {
+      if (!apiKey) {
+        sendJson(response, 503, { error: "agnes_not_configured" });
+        return;
+      }
+      try {
+        const body = await readJson(request);
+        const result = await requestAgnesAgentResolution({
+          apiKey,
+          endpoint: String(endpoint),
+          fetchImpl,
+          game: body.game,
+          resolution: body.resolution,
+        });
+        sendJson(response, 200, { ...result, fallback: false });
       } catch (error) {
         const classification = classifyRequestError(error);
         sendJson(response, classification.status, { error: classification.code });
@@ -504,6 +560,33 @@ export function createGameServer({
       }
       return;
     }
+    if (request.method === "POST" && url.pathname === "/api/agent/stream") {
+      if (!apiKey) {
+        sendJson(response, 503, { error: "agnes_not_configured" });
+        return;
+      }
+      try {
+        const body = await readJson(request);
+        const requestOptions = {
+          apiKey,
+          endpoint: String(endpoint),
+          fetchImpl,
+          game: body.game,
+          history: body.history,
+          action: typeof body.action === "string" ? body.action.trim().slice(0, 120) : "",
+        };
+        const result = await requestAgnesAgentTurn({
+          ...requestOptions,
+        });
+        const fallback = false;
+        if (!result.structured) console.warn("Agnes 内容合同漂移：event_contract_drift");
+        sendJson(response, 200, { ...result, fallback });
+      } catch (error) {
+        const classification = classifyRequestError(error);
+        sendJson(response, classification.status, { error: classification.code });
+      }
+      return;
+    }
     if (request.method === "POST" && url.pathname === "/api/fate/stream") {
       if (!apiKey) {
         sendJson(response, 503, { error: "agnes_not_configured" });
@@ -555,6 +638,10 @@ export function createGameServer({
     }
     if (request.method !== "GET" && request.method !== "HEAD") {
       sendJson(response, 405, { error: "method_not_allowed" });
+      return;
+    }
+    if (url.pathname === "/lib" || url.pathname.startsWith("/lib/")) {
+      serveStatic(request, response, libDirectory, url.pathname.slice("/lib".length) || "/");
       return;
     }
     serveStatic(request, response, publicDirectory, url.pathname);

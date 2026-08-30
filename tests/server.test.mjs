@@ -477,3 +477,14 @@ test("static game assets revalidate so local fixes are visible after reload", as
     assert.equal(response.headers.get("cache-control"), "no-cache");
   });
 });
+
+test("local server exposes the browser Agnes dependency graph under /lib", async () => {
+  await withServer({ apiKey: "" }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/lib/agnes-contract.mjs`);
+    const source = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "text/javascript; charset=utf-8");
+    assert.match(source, /export function buildAgnesPayload/);
+  });
+});

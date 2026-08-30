@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   calculateMonthlyCultivation,
   createNewGame,
+  registerNpcEncounter,
 } from "../public/game-engine.mjs";
 import {
   CRAFT_RECIPES,
@@ -163,7 +164,16 @@ test("relationship stages and romance are independent of player and NPC gender",
   assert.equal(getRelationshipStage(20), "相识");
   assert.equal(getRelationshipStage(100), "生死相许");
 
-  const state = stateFor(8);
+  const state = registerNpcEncounter(stateFor(8), {
+    id: "daoist-he",
+    name: "何观澜",
+    gender: "男",
+    species: "人族",
+    realmIndex: 1,
+    stageIndex: 0,
+    goal: "寻找失散的同门",
+    alive: true,
+  }, { eventId: "road-meeting", summary: "你们在山路相识。" });
   const target = state.world.npcs.find((npc) => npc.gender === "男");
   const result = interactWithNpc(state, target.id, {
     kind: "romance",

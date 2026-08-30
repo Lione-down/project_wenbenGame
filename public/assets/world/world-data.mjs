@@ -1,0 +1,15 @@
+export default Object.freeze([
+  { id: "north-wastes", name: "北境荒原", type: "region", keywords: ["北境", "荒原", "寒铁"], summary: "寒潮与兽群交替南下，北天寒星铁偶见于冻裂矿脉。" },
+  { id: "red-moon-city", name: "红月城", type: "city", keywords: ["红月城", "坊市"], summary: "北线商路节点，城权会随势力冲突发生动态变化。" },
+  { id: "qinglan-sect", name: "青岚宗", type: "faction", keywords: ["宗门", "青岚"], summary: "以引气、剑诀与外门历练立宗的北地宗门。" },
+  { id: "black-arrow", name: "黑箭盟", type: "faction", keywords: ["掮客", "暗杀", "黑箭"], summary: "通过情报差和代理人布局的地下势力。" },
+  { id: "li-yunxiao", name: "李云霄", type: "canonical-character", keywords: ["炎武城", "破军武帝"], summary: "世界背景人物；只有主线实际相遇后才能进入玩家 NPC 生态。" },
+  { id: "great-expansion-soul-art", name: "大衍神诀", type: "technique", keywords: ["神魂", "衍神"], summary: "锤炼神识与魂力的高阶功法资料。" },
+  { id: "tyrant-body-art", name: "霸天炼体诀", type: "technique", keywords: ["炼体", "肉身"], summary: "以极端淬炼强化肉身的功法资料。" },
+  { id: "falling-petal-sword", name: "落英剑诀", type: "martial-skill", keywords: ["剑法", "木"], summary: "以虚实错叠封锁退路的木属剑诀。" },
+  { id: "star-breaking-palm", name: "碎星掌", type: "martial-skill", keywords: ["掌法", "土"], summary: "掌势沉重、正面破势的土属武技。" },
+  { id: "star-iron", name: "北天寒星铁", type: "material", keywords: ["北境", "寒铁", "炼器"], summary: "北境冻裂矿脉中的稀有炼器材料。" },
+  { id: "divine-crystal", name: "神宇净晶", type: "material", keywords: ["神魂", "净化"], summary: "可用于高阶神魂净化与阵器炼制。" },
+  { id: "realm-foundation", name: "武徒至三才境", type: "realm", keywords: ["境界", "筑基"], summary: "前期武道境界遵循大境界与初中后圆满四阶段。" },
+  { id: "guardian-beast", name: "灵材守护兽", type: "event", keywords: ["机缘", "妖兽", "药材"], summary: "珍稀灵材可能由守护妖兽占据，战斗必须服务于因果与获取链。" },
+]);

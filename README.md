@@ -21,7 +21,7 @@ AGNES_API_KEY=你的真实Key
 AGNES_BASE_URL=https://api.agnes-ai.cn/v1
 ```
 
-服务端通过 OpenAI Compatible Chat Completions endpoint `https://api.agnes-ai.cn/v1/chat/completions` 调用固定模型 `agnes-2.5-flash`，使用 `Authorization: Bearer`。默认使用 Streaming SSE，前端实时显示生成草稿；完整内容通过游戏事件合同后才允许结算。`POST /api/fate` 仍保留非流式能力，只在尚未收到任何 token 时作为 fallback。Key 只由 Node 服务读取，不会进入浏览器代码、本地存档或 Provider 错误信息。`.env.local` 已被 `.gitignore` 忽略，不要把真实 Key 粘贴到聊天、截图或提交中。
+服务端通过统一 `AgnesProvider` 调用 OpenAI Compatible Chat Completions endpoint `https://api.agnes-ai.cn/v1/chat/completions`，模型固定为 `agnes-2.5-flash`。活跃主线使用 `/api/agent/stream`：Decision 阶段非流式调用原生 Tools，本地 RuleEngine 验证并原子提交 GameState，Narrative 阶段以单次 JSON、`stream:false` 描写已确定事实且不携带状态修改 Tool；TapTap H5 player-key 模式显式使用 `browser.fetch`，同样保持非流式。`/api/fate*` 只保留旧客户端兼容，不是活跃 fallback。Key 只由 Node 服务或玩家本次浏览器会话读取，不会进入存档、日志或发布包；`.env.local` 已被 `.gitignore` 忽略。
 
 配置完成后重启 `npm start`。首页右上角显示“Agnes 2.5 Flash 可用”即表示服务读取到了 Key，这只证明已配置，不等于真实 Provider 调用已经成功。
 

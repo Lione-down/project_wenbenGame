@@ -10,8 +10,8 @@ test("package root entry loads public assets through package-relative paths", as
   const html = await readFile(rootEntryUrl, "utf8");
 
   assert.match(html, /<title>天命之外<\/title>/);
-  assert.match(html, /href="\.\/public\/styles\.css\?v=20260824-r8"/);
-  assert.match(html, /src="\.\/public\/app\.mjs\?v=20260824-r8-static405"/);
+  assert.match(html, /href="\.\/public\/styles\.css\?v=20260830-p1b"/);
+  assert.match(html, /src="\.\/public\/app\.mjs\?v=20260830-p1b"/);
   assert.doesNotMatch(html, /(?:href|src)="\/(?:styles\.css|app\.mjs)/);
   assert.doesNotMatch(html, /(?:AGNES_API_KEY|\.env(?:\.local)?|secret[-_ ]?(?:key|token))/i);
 });
@@ -23,7 +23,6 @@ test("package root entry matches the Node server entry after path normalization"
   ]);
   const normalizedRootHtml = rootHtml
     .replace(`    ${staticModeMeta}\n`, "")
-    .replace("app.mjs?v=20260824-r8-static405", "app.mjs?v=20260824-r8")
     .replaceAll('href="./public/', 'href="/')
     .replaceAll('src="./public/', 'src="/');
 

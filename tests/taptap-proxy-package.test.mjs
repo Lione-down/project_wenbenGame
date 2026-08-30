@@ -12,13 +12,6 @@ const execFileAsync = promisify(execFile);
 const projectDirectory = fileURLToPath(new URL("../", import.meta.url));
 const allowedOrigin = "https://game.example.taptap.io";
 
-function applicationSse(complete) {
-  return new Response(`event: complete\ndata: ${JSON.stringify(complete)}\n\n`, {
-    status: 200,
-    headers: { "Content-Type": "text/event-stream; charset=utf-8" },
-  });
-}
-
 async function listen(server) {
   await new Promise((resolveListen, reject) => {
     server.once("error", reject);
@@ -63,7 +56,7 @@ test("external API base accepts production HTTPS and local loopback QA only", as
   client.configureGameApiBase("");
 });
 
-test("status fate stream and resolution share the configured proxy origin", async () => {
+test("status fate and active JSON Agent routes share the configured proxy origin", async () => {
   const client = await import("../public/game-client.mjs");
   assert.equal(typeof client.requestProviderStatus, "function", "missing status client");
   assert.equal(typeof client.configureGameApiBase, "function", "missing proxy configuration");
@@ -74,14 +67,14 @@ test("status fate stream and resolution share the configured proxy origin", asyn
     if (String(url).endsWith("/api/status")) {
       return Response.json({ configured: true, model: "agnes-2.5-flash" });
     }
-    if (String(url).endsWith("/api/fate/stream")) {
-      return applicationSse({ event: { id: "stream-event" }, rawContent: "stream" });
+    if (String(url).endsWith("/api/agent/stream")) {
+      return Response.json({ event: { id: "stream-event" }, rawContent: "stream" });
     }
     if (String(url).endsWith("/api/fate")) {
       return Response.json({ event: { id: "fate-event" }, rawContent: "fate" });
     }
-    if (String(url).endsWith("/api/resolution")) {
-      return applicationSse({
+    if (String(url).endsWith("/api/agent/resolution")) {
+      return Response.json({
         resolution: {
           narrative: "主持叙事",
           npcReaction: "NPC 反应",
@@ -119,8 +112,8 @@ test("status fate stream and resolution share the configured proxy origin", asyn
   assert.deepEqual(requestedUrls, [
     "https://proxy.example.com/game/api/status",
     "https://proxy.example.com/game/api/fate",
-    "https://proxy.example.com/game/api/fate/stream",
-    "https://proxy.example.com/game/api/resolution",
+    "https://proxy.example.com/game/api/agent/stream",
+    "https://proxy.example.com/game/api/agent/resolution",
   ]);
 });
 

@@ -14,6 +14,14 @@ export const ITEM_CATALOG = Object.freeze({
   talisman: { name: "护身符", category: "consumable" },
   formationPlate: { name: "聚元阵盘", category: "equipment" },
   beastContract: { name: "御兽契印", category: "consumable" },
+  windHyacinth: { name: "风信子", category: "spirit-herb", tier: "低阶", use: "炼制风属性丹药" },
+  divineCrystal: { name: "神宇净晶", category: "rare-material", tier: "高阶", use: "净化神魂与阵基" },
+  embroideredDew: { name: "百绣蕴文露", category: "spirit-liquid", tier: "珍稀", use: "温养经脉与符文" },
+  yimuQi: { name: "乙木之气", category: "elemental-material", tier: "中阶", use: "木系功法与灵植" },
+  starIron: { name: "北天寒星铁", category: "ore", tier: "高阶", use: "炼制寒属性玄器" },
+  beastFang: { name: "铁背獠豕獠牙", category: "beast-material", tier: "低阶", use: "炼器与任务交付" },
+  beastHide: { name: "铁背獠豕皮", category: "beast-material", tier: "低阶", use: "制作护具" },
+  frostScale: { name: "霜甲蜥鳞", category: "beast-material", tier: "中阶", use: "寒阵与护甲" },
 });
 
 export const CRAFT_RECIPES = Object.freeze({
@@ -134,11 +142,15 @@ export function sellMarketItem(state, itemId, quantity = 1) {
   if ((state.player.inventory[itemId] ?? 0) < quantity) {
     throw new Error("库存不足");
   }
-  const revenue = Math.floor(price * 0.6) * quantity;
+  const revenue = getMarketSellPrice(state, itemId) * quantity;
   const next = structuredClone(state);
   next.player.inventory[itemId] -= quantity;
   next.player.resources.spiritStones += revenue;
   return { state: next, revenue, item: ITEM_CATALOG[itemId] };
+}
+
+export function getMarketSellPrice(state, itemId) {
+  return Math.floor(marketPrice(state, itemId) * 0.6);
 }
 
 export function equipTechnique(state, technique, slot) {
@@ -222,6 +234,13 @@ export function joinSect(state, sectName) {
     contribution: 0,
     reputation: 0,
     joinedAtTurn: next.meta.turn,
+    history: [{
+      turn: next.meta.turn,
+      year: next.world.year,
+      month: next.world.month,
+      eventId: "local-sect-join",
+      record: `加入${name}`,
+    }],
   };
   return next;
 }
@@ -257,32 +276,39 @@ export function promoteSect(state) {
 }
 
 export function upgradeCave(state, target) {
+  const requirement = getCaveUpgradeRequirement(state, target);
+  if (requirement.isMaxLevel) throw new Error(target === "aura" ? "洞府灵气已达上限" : "洞府设施已达上限");
+  if (!requirement.canUpgrade) throw new Error("洞府升级资源不足");
   const next = structuredClone(state);
-  if (target === "aura") {
-    const level = state.player.cave.auraLevel;
-    if (level >= 4) throw new Error("洞府灵气已达上限");
-    const stones = 120 * level;
-    const ore = level;
-    if (state.player.resources.spiritStones < stones || state.player.inventory.ore < ore) {
-      throw new Error("洞府升级资源不足");
-    }
-    next.player.resources.spiritStones -= stones;
-    next.player.inventory.ore -= ore;
-    next.player.cave.auraLevel += 1;
-    return next;
-  }
-  if (!Object.hasOwn(state.player.cave.facilities, target)) throw new Error("未知洞府设施");
-  const level = state.player.cave.facilities[target];
-  if (level >= 3) throw new Error("洞府设施已达上限");
-  const stones = 80 * (level + 1);
-  const ore = level + 1;
-  if (state.player.resources.spiritStones < stones || state.player.inventory.ore < ore) {
-    throw new Error("洞府升级资源不足");
-  }
-  next.player.resources.spiritStones -= stones;
-  next.player.inventory.ore -= ore;
-  next.player.cave.facilities[target] += 1;
+  next.player.resources.spiritStones -= requirement.costs.find((cost) => cost.id === "spiritStones").required;
+  next.player.inventory.ore -= requirement.costs.find((cost) => cost.id === "ore").required;
+  if (target === "aura") next.player.cave.auraLevel += 1;
+  else next.player.cave.facilities[target] += 1;
   return next;
+}
+
+export function getCaveUpgradeRequirement(state, target) {
+  const isAura = target === "aura";
+  if (!isAura && !Object.hasOwn(state.player.cave.facilities, target)) throw new Error("未知洞府设施");
+  const currentLevel = isAura ? state.player.cave.auraLevel : state.player.cave.facilities[target];
+  const maxLevel = isAura ? 4 : 3;
+  const requiredStones = isAura ? 120 * currentLevel : 80 * (currentLevel + 1);
+  const requiredOre = isAura ? currentLevel : currentLevel + 1;
+  const heldStones = state.player.resources.spiritStones;
+  const heldOre = state.player.inventory.ore ?? 0;
+  const costs = [
+    { id: "spiritStones", name: "元石", required: requiredStones, held: heldStones, missing: Math.max(0, requiredStones - heldStones) },
+    { id: "ore", name: ITEM_CATALOG.ore.name, required: requiredOre, held: heldOre, missing: Math.max(0, requiredOre - heldOre) },
+  ];
+  const isMaxLevel = currentLevel >= maxLevel;
+  return {
+    target,
+    currentLevel,
+    maxLevel,
+    isMaxLevel,
+    costs,
+    canUpgrade: !isMaxLevel && costs.every((cost) => cost.missing === 0),
+  };
 }
 
 export function plantCaveCrop(state) {

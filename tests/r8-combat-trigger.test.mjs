@@ -8,7 +8,7 @@ import {
 } from "../lib/agnes-contract.mjs";
 import * as combatSystem from "../public/combat-system.mjs";
 import { chooseOfflineEvent } from "../public/game-data.mjs";
-import { createNewGame } from "../public/game-engine.mjs";
+import { createNewGame, registerNpcEncounter } from "../public/game-engine.mjs";
 
 const projectUrl = new URL("../", import.meta.url);
 
@@ -121,7 +121,16 @@ test("Agnes combat contract accepts context but rejects Provider-authored numeri
 test("local rules derive encounter numbers from world state instead of always adding one realm", () => {
   assert.equal(typeof combatSystem.createEncounterFromEvent, "function");
   const { createEncounterFromEvent } = combatSystem;
-  const state = stateFor(41);
+  const state = registerNpcEncounter(stateFor(41), {
+    id: "lin-xuan",
+    name: "林玄",
+    gender: "男",
+    species: "人族",
+    realmIndex: 2,
+    stageIndex: 1,
+    goal: "查清商道截杀",
+    alive: true,
+  }, { eventId: "red-moon-road-conflict", summary: "你在商道遇见林玄。" });
   const knownNpc = state.world.npcs.find((npc) => npc.name === "林玄");
   const knownEncounter = createEncounterFromEvent(state, combatEvent());
   assert.equal(knownEncounter.realmIndex, knownNpc.realmIndex);

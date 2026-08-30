@@ -78,8 +78,7 @@ test("new games persist spirit-root grade, elements and complete foundation stat
   assert.equal(state.player.cave.auraLevel, 1);
   assert.equal(state.player.sect.contribution, 0);
   assert.ok(Array.isArray(state.player.relationships));
-  assert.ok(Array.isArray(state.world.npcs));
-  assert.ok(state.world.npcs.length >= 3);
+  assert.deepEqual(state.world.npcs, []);
   assert.ok(Object.values(state.world.market.prices).every((price) => Number.isInteger(price) && price > 0));
 
   assert.deepEqual(importGame(exportGame(state)), state);

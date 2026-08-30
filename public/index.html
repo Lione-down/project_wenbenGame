@@ -7,7 +7,7 @@
     <meta name="description" content="《天命之外》是一款由 Agnes 驱动的高自由玄幻文字修炼 H5 游戏。">
     <meta name="destiny-api-base" content="">
     <title>天命之外</title>
-    <link rel="stylesheet" href="/styles.css?v=20260824-r8">
+    <link rel="stylesheet" href="/styles.css?v=20260830-p1b">
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -22,7 +22,7 @@
           <div class="intro-story">
             <p class="eyebrow">天武大陆 · 高自由修炼模拟</p>
             <h1 id="game-title">天命之外</h1>
-            <p>你不是既定故事的主角。一次选择只推进一个月，NPC 会继续生活，伤势、寿元、功德与业力都会留下后果。</p>
+          <p>你不是既定故事的主角。一次选择按行动实际耗时推进，NPC 会继续生活，伤势、寿元、功德与业力都会留下后果。</p>
           </div>
 
           <section class="birth-ledger" aria-label="创建角色">
@@ -97,12 +97,12 @@
             <div class="event-heading"><div><p id="event-source" class="eyebrow">命簿推演</p><h2 id="event-title" tabindex="-1">等待命途显现</h2></div><span id="danger-mark" class="danger-mark" data-danger="low">平和</span></div>
             <div class="gold-rule" aria-hidden="true"></div>
             <p id="event-scene" class="event-scene">风吹过空白的命簿，尚未落下一字。</p>
-            <div id="event-loading" class="event-loading" hidden><i aria-hidden="true"></i><span>Agnes 正在续写这一月</span></div>
+            <div id="event-loading" class="event-loading" hidden><i aria-hidden="true"></i><span>Agnes 正在思考中</span></div>
             <pre id="streaming-preview" class="streaming-preview" aria-live="polite" hidden></pre>
-            <div id="provider-error" class="provider-error" role="alert" hidden><strong>Agnes 未能写下这一页</strong><p id="provider-error-message"></p><button id="offline-continue" class="secondary-button" type="button">改用命簿引擎继续</button></div>
-            <section id="system-panel" class="system-panel" aria-label="本地修炼系统" hidden><div id="system-panel-content" class="system-grid"></div><div id="combat-forecast" class="combat-forecast" hidden></div><div id="system-action-list" class="system-action-list"></div><button id="return-to-mainline" class="secondary-button return-mainline" type="button">返回当前主线</button></section>
+            <div id="provider-error" class="provider-error" role="alert" hidden><strong>Agnes 未能写下这一页</strong><p id="provider-error-message"></p><div class="retry-actions"><button id="retry-generation" class="primary-button" type="button">重新生成</button><button id="offline-continue" class="secondary-button" type="button">改用命簿引擎继续</button></div></div>
+            <section id="system-panel" class="system-panel" aria-label="本地修炼系统" hidden><div id="system-panel-content" class="system-grid"></div><div id="combat-forecast" class="combat-forecast" hidden></div><div id="system-action-list" class="system-action-list"></div><article id="npc-dossier" class="npc-dossier" tabindex="-1" hidden></article><button id="return-to-mainline" class="secondary-button return-mainline" type="button">返回当前主线</button></section>
             <div id="choice-list" class="choice-list" aria-label="命途选择"></div>
-            <article id="resolution-view" class="choice-result resolution-view" aria-labelledby="resolution-title" hidden><header><p id="resolution-status" class="eyebrow">本地结算已定</p><h2 id="resolution-title">此月回响</h2></header><p id="result-copy" class="local-outcome"></p><p id="resolution-narrative" class="resolution-narrative"></p><dl class="resolution-details"><div><dt>NPC 反应</dt><dd id="resolution-npc-reaction"></dd></div><div><dt>实际后果</dt><dd id="resolution-consequence"></dd></div><div><dt>后续线索</dt><dd id="resolution-next-clue"></dd></div></dl><p id="resolution-error" class="resolution-error" role="alert" hidden></p><button id="next-event" class="primary-button" type="button">继续，进入下一月</button></article>
+            <article id="resolution-view" class="choice-result resolution-view" aria-labelledby="resolution-title" hidden><header><p id="resolution-status" class="eyebrow">本地结算已定</p><h2 id="resolution-title">此段回响</h2></header><p id="result-copy" class="local-outcome"></p><p id="resolution-narrative" class="resolution-narrative"></p><dl class="resolution-details"><div><dt>NPC 反应</dt><dd id="resolution-npc-reaction"></dd></div><div><dt>实际后果</dt><dd id="resolution-consequence"></dd></div><div><dt>后续线索</dt><dd id="resolution-next-clue"></dd></div></dl><p id="resolution-error" class="resolution-error" role="alert" hidden></p><div class="retry-actions"><button id="retry-resolution" class="secondary-button" type="button" hidden>重试 AI 主持</button><button id="next-event" class="primary-button" type="button">继续命途</button></div></article>
             <form id="free-action-form" class="free-action-form"><label for="free-action-input">自由行动</label><div><input id="free-action-input" type="text" maxlength="120" autocomplete="off" placeholder="输入任何你想做的事"><button type="submit">执行</button></div></form>
             <details id="command-drawer" class="command-drawer"><summary>更多操作</summary><nav id="command-menu" class="command-menu" aria-label="常驻命令"><button type="button" data-command="/状态">状态</button><button type="button" data-command="/修炼">修炼</button><button type="button" data-command="/突破">突破</button><button type="button" data-command="/背包">背包</button><button type="button" data-command="/功法">功法</button><button type="button" data-command="/技艺">技艺</button><button type="button" data-command="/宗门">宗门</button><button type="button" data-command="/洞府">洞府</button><button type="button" data-command="/坊市">坊市</button><button type="button" data-command="/情缘">情缘</button><button type="button" data-command="/生态">生态</button><button type="button" data-command="/帮助">帮助</button></nav></details>
             <aside id="mobile-player-status" class="mobile-player-status" aria-label="当前玩家状态" hidden>
@@ -138,12 +138,16 @@
       <section id="agnes-settings-view" class="agnes-settings-view" aria-labelledby="agnes-settings-title" hidden>
         <button id="back-from-agnes-settings" class="back-button" type="button">返回命簿藏室</button>
         <div class="agnes-settings-heading"><span aria-hidden="true">灵</span><div><p class="eyebrow">玩家自持凭证</p><h2 id="agnes-settings-title">连接 Agnes</h2></div></div>
-        <p class="agnes-key-warning">Key 仅保存在当前设备浏览器，并会在你主动使用 AI 功能时直接发送给 Agnes。不要在公共设备保存。</p>
+        <div class="agnes-key-source"><div><strong>还没有 Key？</strong><small>在手机浏览器登录 Agnes 平台后自行获取</small></div><a id="get-agnes-key-link" href="https://platform.agnes-ai.cn/login" target="_blank" rel="noopener noreferrer" aria-label="在手机浏览器打开 Agnes 平台获取 Key">前往获取 Key <span aria-hidden="true">↗</span></a></div>
+        <p class="agnes-key-warning">Key 仅保存在当前设备浏览器，不会出现在公网可访问的游戏页面、链接、导出命簿或日志中，也不会暴露给其他玩家。你主动使用 AI 功能时，Key 才会通过 HTTPS 直接发送给 Agnes 官方接口。不要在公共设备保存。</p>
         <label class="agnes-key-label" for="agnes-key-input">Agnes API Key</label>
         <div class="secret-input-row"><input id="agnes-key-input" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="粘贴你自己的 Key"><button id="toggle-agnes-key-visibility" type="button" aria-pressed="false">显示</button></div>
         <label class="remember-key-option"><input id="remember-agnes-key" type="checkbox"><span><strong>在此设备记住</strong><small>不勾选时仅保留到本次浏览器会话结束</small></span></label>
-        <div class="agnes-settings-actions"><button id="save-agnes-settings" class="primary-button" type="button">保存设置</button><button id="test-agnes-connection" class="secondary-button" type="button">测试连接</button></div>
+        <p id="agnes-transport-status" class="agnes-transport-status">当前 Transport：browser.fetch</p>
+        <p class="agnes-transport-note">TapTap H5 与 Chrome/Safari 均使用可观测的 browser.fetch；扫码真机结果为最终验收。</p>
+        <div class="agnes-settings-actions"><button id="save-agnes-settings" class="primary-button" type="button">保存设置</button><button id="test-agnes-connection" class="secondary-button" type="button">Chrome/Safari 最小测试</button><button id="test-taptap-connection" class="secondary-button" type="button">TapTap H5 一键最小连接测试</button></div>
         <p id="agnes-settings-status" class="agnes-settings-status" role="status">未保存 Key，当前使用离线命簿引擎。</p>
+        <pre id="agnes-connection-diagnostic" class="agnes-connection-diagnostic" hidden></pre>
         <div class="agnes-key-clear"><button id="request-clear-agnes-key" class="danger-button" type="button">清除已保存的 Key</button><div id="clear-agnes-confirmation" hidden><p>将同时清除本次会话和此设备保存的 Key。</p><button id="cancel-clear-agnes-key" type="button">取消</button><button id="confirm-clear-agnes-key" type="button">确认清除</button></div></div>
       </section>
     </aside>
@@ -151,6 +155,6 @@
     <section id="end-screen" class="end-screen" aria-labelledby="end-title" hidden><p class="eyebrow">命簿封卷</p><h2 id="end-title">此生已尽</h2><p id="end-summary"></p><button id="restart-from-end" class="primary-button" type="button">再开一世</button></section>
     <div id="fate-seal" class="fate-seal" aria-hidden="true">定</div>
     <div id="toast" class="toast" role="status" hidden></div>
-    <script type="module" src="/app.mjs?v=20260824-r8"></script>
+    <script type="module" src="/app.mjs?v=20260830-p1b"></script>
   </body>
 </html>

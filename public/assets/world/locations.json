@@ -1,0 +1,4 @@
+[
+  { "id": "north-wastes", "name": "北境荒原", "type": "region", "keywords": ["北境", "荒原", "寒铁"], "summary": "寒潮与兽群交替南下，北天寒星铁偶见于冻裂矿脉。" },
+  { "id": "red-moon-city", "name": "红月城", "type": "city", "keywords": ["红月城", "坊市"], "summary": "北线商路节点，城权会随势力冲突发生动态变化。" }
+]

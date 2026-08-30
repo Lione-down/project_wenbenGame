@@ -1,0 +1,4 @@
+[
+  { "id": "falling-petal-sword", "name": "落英剑诀", "type": "martial-skill", "keywords": ["剑法", "木"], "summary": "以虚实错叠封锁退路的木属剑诀。" },
+  { "id": "star-breaking-palm", "name": "碎星掌", "type": "martial-skill", "keywords": ["掌法", "土"], "summary": "掌势沉重、正面破势的土属武技。" }
+]

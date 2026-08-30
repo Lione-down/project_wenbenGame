@@ -43,6 +43,13 @@ test("OpenAI compatible contract pins the base URL and chat endpoint", () => {
   assert.equal(AGNES_CHAT_COMPLETIONS_URL, "https://api.agnes-ai.cn/v1/chat/completions");
 });
 
+test("compatible response model aliases do not fail an otherwise valid completion", () => {
+  assert.equal(extractChatCompletionText({
+    model: "agnes-2.5-flash-202608",
+    choices: [{ finish_reason: "stop", message: { role: "assistant", content: "好" } }],
+  }), "好");
+});
+
 test("buildAgnesPayload uses the OpenAI Chat request shape and configurable stream flag", () => {
   const payload = buildAgnesPayload({ player: { name: "顾长离" } }, [], "", { stream: true });
 

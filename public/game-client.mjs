@@ -6,10 +6,13 @@ export const SAVE_KEY = "destiny-beyond.save.v1";
 let configuredApiBaseUrl = "";
 let configuredPlayerAgnes = null;
 
-export function configurePlayerAgnesDirect(playerAgnesModule, key = "") {
+export function configurePlayerAgnesDirect(playerAgnesModule, key = "", { transportPolicy = "auto" } = {}) {
   const credential = typeof key === "string" ? key.trim() : "";
+  const normalizedTransportPolicy = ["auto", "browser-fetch", "tap-request"].includes(transportPolicy)
+    ? transportPolicy
+    : "auto";
   configuredPlayerAgnes = credential && playerAgnesModule
-    ? { module: playerAgnesModule, key: credential }
+    ? { module: playerAgnesModule, key: credential, transportPolicy: normalizedTransportPolicy }
     : null;
   return Boolean(configuredPlayerAgnes);
 }
@@ -104,6 +107,14 @@ export function createDisplayOnlyFateEvent(rawContent, turn = 0) {
     danger: "low",
     choices: [
       {
+        id: "retry-agnes-generation",
+        tag: "opportunity",
+        label: "重新生成",
+        hint: "重新请求本次命途，不结算原文",
+        result: "你要求 Agnes 重新生成本次命途。",
+        effects: {},
+      },
+      {
         id: "use-offline-engine",
         tag: "peace",
         label: "改用命簿引擎",
@@ -194,72 +205,17 @@ function requestBody(state, history, action) {
   });
 }
 
-function findSseBoundary(buffer) {
-  const match = /\r?\n\r?\n/.exec(buffer);
-  return match ? { index: match.index, length: match[0].length } : null;
-}
-
-async function consumeApplicationSse(response, onDelta) {
-  if (!response.body || typeof response.body.getReader !== "function") {
+async function consumeApplicationJson(response) {
+  let body;
+  try {
+    body = await response.json();
+  } catch {
     throw new ProviderRequestError("provider_error", response.status);
   }
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let completeData = null;
-
-  const consumeFrame = (frame) => {
-    let eventName = "message";
-    const dataLines = [];
-    for (const line of frame.split(/\r?\n/)) {
-      if (line.startsWith("event:")) eventName = line.slice(6).trim();
-      if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
-    }
-    if (dataLines.length === 0) return;
-    let data;
-    try {
-      data = JSON.parse(dataLines.join("\n"));
-    } catch {
-      throw new ProviderRequestError("provider_error", response.status);
-    }
-    if (eventName === "delta") {
-      if (typeof data.text !== "string") {
-        throw new ProviderRequestError("provider_error", response.status);
-      }
-      onDelta(data.text);
-      return;
-    }
-    if (eventName === "complete") {
-      completeData = data;
-      return;
-    }
-    if (eventName === "error") {
-      throw new ProviderRequestError(data.error || "provider_error", response.status);
-    }
-  };
-
-  while (!completeData) {
-    let result;
-    try {
-      result = await reader.read();
-    } catch {
-      throw new ProviderRequestError("network_unavailable", 0);
-    }
-    buffer += decoder.decode(result.value, { stream: !result.done });
-    let boundary = findSseBoundary(buffer);
-    while (boundary) {
-      const frame = buffer.slice(0, boundary.index);
-      buffer = buffer.slice(boundary.index + boundary.length);
-      consumeFrame(frame);
-      if (completeData) break;
-      boundary = findSseBoundary(buffer);
-    }
-    if (result.done) break;
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new ProviderRequestError("provider_error", response.status);
   }
-  if (!completeData) {
-    throw new ProviderRequestError("network_unavailable", 0);
-  }
-  return completeData;
+  return body;
 }
 
 export async function streamAgnesEvent(
@@ -270,18 +226,21 @@ export async function streamAgnesEvent(
   onDelta = () => {},
 ) {
   if (configuredPlayerAgnes) {
-    const result = await configuredPlayerAgnes.module.streamPlayerAgnesEvent(
+    const result = await configuredPlayerAgnes.module.streamPlayerAgentTurn(
       fetchImpl,
       configuredPlayerAgnes.key,
       state,
       history,
       action,
       onDelta,
+      { transportPolicy: configuredPlayerAgnes.transportPolicy },
     );
     if (result.event) {
-      return typeof result.rawContent === "string"
-        ? { ...result.event, providerRawContent: result.rawContent }
-        : result.event;
+      return {
+        ...result.event,
+        ...(typeof result.rawContent === "string" ? { providerRawContent: result.rawContent } : {}),
+        ...(result.gameState ? { agentGameState: structuredClone(result.gameState) } : {}),
+      };
     }
     if (typeof result.rawContent === "string" && result.rawContent.trim()) {
       return createDisplayOnlyFateEvent(result.rawContent, state?.meta?.turn);
@@ -291,18 +250,15 @@ export async function streamAgnesEvent(
   const serialized = requestBody(state, history, action);
   let response;
   try {
-    response = await fetchImpl(resolveGameApiUrl("/api/fate/stream"), {
+    response = await fetchImpl(resolveGameApiUrl("/api/agent/stream"), {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: serialized,
     });
   } catch {
     throw new ProviderRequestError("network_unavailable", 0);
   }
   if (!response.ok) {
-    if ([404, 405, 501].includes(response.status)) {
-      return requestAgnesEvent(fetchImpl, state, history, action);
-    }
     let body = {};
     try {
       body = await response.json();
@@ -311,11 +267,13 @@ export async function streamAgnesEvent(
     }
     throw new ProviderRequestError(body.error || "provider_error", response.status);
   }
-  const complete = await consumeApplicationSse(response, onDelta);
+  const complete = await consumeApplicationJson(response);
   if (complete.event && typeof complete.event === "object") {
-    return typeof complete.rawContent === "string"
-      ? { ...complete.event, providerRawContent: complete.rawContent }
-      : complete.event;
+    return {
+      ...complete.event,
+      ...(typeof complete.rawContent === "string" ? { providerRawContent: complete.rawContent } : {}),
+      ...(complete.gameState ? { agentGameState: structuredClone(complete.gameState) } : {}),
+    };
   }
   if (typeof complete.rawContent === "string" && complete.rawContent.trim()) {
     return createDisplayOnlyFateEvent(complete.rawContent, state?.meta?.turn);
@@ -334,6 +292,7 @@ export async function requestAgnesResolution(fetchImpl, state, onDelta = () => {
       configuredPlayerAgnes.key,
       state,
       onDelta,
+      { transportPolicy: configuredPlayerAgnes.transportPolicy },
     );
     return {
       resolution: result.resolution,
@@ -344,9 +303,9 @@ export async function requestAgnesResolution(fetchImpl, state, onDelta = () => {
   }
   let response;
   try {
-    response = await fetchImpl(resolveGameApiUrl("/api/resolution"), {
+    response = await fetchImpl(resolveGameApiUrl("/api/agent/resolution"), {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ game: state, resolution: pendingResolution }),
     });
   } catch {
@@ -361,7 +320,7 @@ export async function requestAgnesResolution(fetchImpl, state, onDelta = () => {
     }
     throw new ProviderRequestError(body.error || "provider_error", response.status);
   }
-  const complete = await consumeApplicationSse(response, onDelta);
+  const complete = await consumeApplicationJson(response);
   if (typeof complete.rawContent !== "string" || !complete.rawContent.trim()) {
     throw new ProviderRequestError("provider_error", response.status);
   }

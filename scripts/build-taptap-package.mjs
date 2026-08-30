@@ -9,6 +9,7 @@ export const PRODUCT_DIRECTORY_NAME = "tianming-zhiwai";
 export const RUNTIME_FILES = Object.freeze([
   "index.html",
   "public/styles.css",
+  "public/agnes-ui-state.mjs",
   "public/app.mjs",
   "public/character-options.mjs",
   "public/combat-system.mjs",
@@ -16,6 +17,7 @@ export const RUNTIME_FILES = Object.freeze([
   "public/game-client.mjs",
   "public/game-data.mjs",
   "public/game-engine.mjs",
+  "public/indexeddb-save-repository.mjs",
   "public/life-systems.mjs",
   "public/ui-presenters.mjs",
   "public/viewport-rules.mjs",
@@ -24,9 +26,28 @@ export const RUNTIME_FILES = Object.freeze([
 
 export const PLAYER_KEY_RUNTIME_FILES = Object.freeze([
   "public/player-agnes.mjs",
+  "public/game-agent-runtime.mjs",
+  "public/agent-tools.mjs",
+  "public/context-builder.mjs",
+  "public/memory-runtime.mjs",
+  "public/npc-knowledge-service.mjs",
+  "public/tool-runtime.mjs",
+  "public/world-knowledge.mjs",
+  "public/assets/world/world-data.mjs",
+  "public/assets/world/locations.json",
+  "public/assets/world/factions.json",
+  "public/assets/world/characters.json",
+  "public/assets/world/techniques.json",
+  "public/assets/world/martial_skills.json",
+  "public/assets/world/items.json",
+  "public/assets/world/realms.json",
+  "public/assets/world/events.json",
+  "lib/agent-runtime.mjs",
   "lib/agnes-contract.mjs",
   "lib/agnes-game-snapshot.mjs",
+  "lib/agnes-provider.mjs",
   "lib/agnes-resolution-contract.mjs",
+  "lib/agnes-tool-parser.mjs",
 ]);
 
 const MAX_PACKAGE_BYTES = 300 * 1024 * 1024;
@@ -87,6 +108,13 @@ function escapeHtmlAttribute(value) {
 
 function sha256(content) {
   return createHash("sha256").update(content).digest("hex");
+}
+
+function stampLocalModuleCacheRevision(text, buildId) {
+  return text.replace(
+    /(["'])((?:\.\.\/|\.\/|\/)[^"']+\.mjs)(?:\?v=[^"']+)?\1/g,
+    (_match, quote, modulePath) => `${quote}${modulePath}?v=${buildId}${quote}`,
+  );
 }
 
 async function pathExists(path) {
@@ -167,7 +195,7 @@ export async function buildTapTapPackage({
       const sourcePath = assertInside(join(resolvedProject, relativePath), resolvedProject, "runtime_source");
       const destinationPath = assertInside(join(productDirectory, relativePath), productDirectory, "runtime_destination");
       const sourceBuffer = await readFile(sourcePath);
-      let text = decoder.decode(sourceBuffer);
+      let text = stampLocalModuleCacheRevision(decoder.decode(sourceBuffer), safeBuildId);
       if (relativePath === "index.html") {
         const matches = text.split(API_BASE_META).length - 1;
         if (matches !== 1) throw new Error("api_base_meta_contract_drift");
@@ -196,6 +224,7 @@ export async function buildTapTapPackage({
     const baseManifest = {
       schemaVersion: 1,
       productDirectory: PRODUCT_DIRECTORY_NAME,
+      cacheRevision: safeBuildId,
       playerKeySettings: Boolean(playerKeySettings),
       keyEmbedded: false,
       apiBaseConfigured: Boolean(normalizedApiBase),

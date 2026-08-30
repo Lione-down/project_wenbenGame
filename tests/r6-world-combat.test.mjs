@@ -7,6 +7,7 @@ import {
   applyChoice,
   createNewGame,
   getRealmCurve,
+  registerNpcEncounter,
 } from "../public/game-engine.mjs";
 import {
   getCombatForecast,
@@ -40,6 +41,17 @@ function stateFor(seed = 1) {
   return createNewGame(profile, seed);
 }
 
+function stateWithEncounteredNpcs(seed = 1) {
+  let state = stateFor(seed);
+  for (const npc of [
+    { id: "lin-xuan", name: "林玄", gender: "男", species: "人族", realmIndex: 0, stageIndex: 0, goal: "追查失窃药箱", alive: true },
+    { id: "shen-qingli", name: "沈青璃", gender: "女", species: "人族", realmIndex: 5, stageIndex: 1, goal: "追查术炼遗迹", alive: true },
+  ]) {
+    state = registerNpcEncounter(state, npc, { eventId: "fixture-encounter", summary: `你在主线中遇见${npc.name}。` });
+  }
+  return state;
+}
+
 function enemy(realmIndex, overrides = {}) {
   return {
     id: `enemy-${realmIndex}`,
@@ -55,7 +67,7 @@ function enemy(realmIndex, overrides = {}) {
 }
 
 test("every elapsed month ages and cultivates living NPCs independently", () => {
-  const state = stateFor(11);
+  const state = stateWithEncounteredNpcs(11);
   const before = state.world.npcs.map((npc) => ({
     id: npc.id,
     ageMonths: npc.ageMonths,
@@ -73,7 +85,7 @@ test("every elapsed month ages and cultivates living NPCs independently", () => 
 });
 
 test("NPCs can break through a small stage or die when lifespan is exhausted", () => {
-  const breakthroughState = stateFor(12);
+  const breakthroughState = stateWithEncounteredNpcs(12);
   const cultivator = breakthroughState.world.npcs[0];
   cultivator.realmIndex = 0;
   cultivator.stageIndex = 0;
@@ -83,7 +95,7 @@ test("NPCs can break through a small stage or die when lifespan is exhausted", (
   assert.equal(advancedNpc.stageIndex, 1);
   assert.equal(advancedNpc.stage, STAGES[1]);
 
-  const lifespanState = stateFor(13);
+  const lifespanState = stateWithEncounteredNpcs(13);
   const elder = lifespanState.world.npcs[0];
   elder.ageMonths = elder.lifespan * 12 - 1;
   const ended = advanceOneMonth(lifespanState, { eventTitle: "又是一月" });
@@ -94,7 +106,7 @@ test("NPCs can break through a small stage or die when lifespan is exhausted", (
 });
 
 test("NPCs form their own bonds while the player spends months elsewhere", () => {
-  let state = stateFor(14);
+  let state = stateWithEncounteredNpcs(14);
   for (let month = 0; month < 6; month += 1) {
     state = advanceOneMonth(state, { eventTitle: "远行" });
   }
@@ -105,7 +117,7 @@ test("NPCs form their own bonds while the player spends months elsewhere", () =>
 });
 
 test("ordinary event choices also advance the NPC ecosystem", () => {
-  const state = stateFor(15);
+  const state = stateWithEncounteredNpcs(15);
   const before = state.world.npcs[0].ageMonths;
   const event = {
     title: "旧桥问路",

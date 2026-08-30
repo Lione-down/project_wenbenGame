@@ -1,25 +1,26 @@
 import {
   AGNES_CHAT_COMPLETIONS_URL,
   AGNES_MODEL,
-  buildAgnesPayload,
   classifyProviderFailure,
-  parseAgnesEventWithRecovery,
 } from "../lib/agnes-contract.mjs";
 import { sanitizeGameSnapshot } from "../lib/agnes-game-snapshot.mjs";
 import {
   buildAgnesResolutionPayload,
   parseAgnesResolution,
 } from "../lib/agnes-resolution-contract.mjs";
+import { AgnesProvider } from "../lib/agnes-provider.mjs";
+import { runEventAgentTurn } from "./game-agent-runtime.mjs";
 
 export const PLAYER_AGNES_SESSION_KEY = "destiny-beyond.player-agnes.session.v1";
 export const PLAYER_AGNES_LOCAL_KEY = "destiny-beyond.player-agnes.local.v1";
 
 export class PlayerAgnesError extends Error {
-  constructor(code, status = 0) {
+  constructor(code, status = 0, transport = null) {
     super(code);
     this.name = "PlayerAgnesError";
     this.code = code;
     this.status = status;
+    if (transport) this.transport = transport;
   }
 }
 
@@ -58,20 +59,195 @@ function providerHeaders(key) {
   };
 }
 
-function classifyResponseStatus(status) {
-  const classified = classifyProviderFailure({ status });
-  return new PlayerAgnesError(classified.code, classified.status);
+function redactDiagnosticValue(value, secrets = [], field = "", seen = new WeakSet()) {
+  if (/authorization|credential|api.?key|token|secret/i.test(field)) return "[REDACTED]";
+  if (typeof value === "string") {
+    let safe = value.replace(/Bearer\s+[^\s,;]+/gi, "Bearer [REDACTED]");
+    for (const secret of secrets.filter(Boolean)) safe = safe.split(secret).join("[REDACTED]");
+    return safe;
+  }
+  if (!value || typeof value !== "object") return value;
+  if (seen.has(value)) return "[Circular]";
+  seen.add(value);
+  if (Array.isArray(value)) return value.map((entry) => redactDiagnosticValue(entry, secrets, field, seen));
+  return Object.fromEntries(Object.entries(value).map(([key, entry]) => [
+    key,
+    redactDiagnosticValue(entry, secrets, key, seen),
+  ]));
 }
 
-async function providerFetch(fetchImpl, key, payload) {
+function tapTransport(result, phase, secrets = [], overrides = {}) {
+  return {
+    channel: "tap.request",
+    name: "tap.request",
+    phase: String(phase || "provider"),
+    stage: "HTTP",
+    errno: result?.errno ?? 0,
+    errMsg: redactDiagnosticValue(result?.errMsg ?? "", secrets, "errMsg"),
+    statusCode: Number(result?.statusCode) || 0,
+    profile: redactDiagnosticValue(result?.profile ?? null, secrets, "profile"),
+    ...overrides,
+  };
+}
+
+function classifyTapRequestFailure(error, phase, secrets = [], forcedStage = "") {
+  const errno = Number(error?.errno);
+  const safeErrno = Number.isFinite(errno) ? errno : 0;
+  const message = typeof error?.errMsg === "string" ? error.errMsg.toLowerCase() : "";
+  let reason = "network";
+  let code = "network_unavailable";
+  let status = 0;
+  if (/timeout|timed out|\u8d85\u65f6/u.test(message)) {
+    reason = "timeout";
+    code = "provider_uncertain";
+    status = 504;
+  } else if (/domain list|not in domain|\u5408\u6cd5\u57df\u540d|\u57df\u540d.*\u4e0d/u.test(message)) {
+    reason = "host-policy";
+  } else if (/dns|resolve host|name resolution/u.test(message)) {
+    reason = "dns";
+  } else if (/\btls\b|\bssl\b|certificate|cert\b/u.test(message)) {
+    reason = "tls";
+  }
+  const stage = forcedStage || ({ "host-policy": "bridge", dns: "DNS", tls: "TLS" }[reason] || "HTTP");
+  return new PlayerAgnesError(code, status, tapTransport(error, phase, secrets, {
+    errno: safeErrno,
+    reason,
+    stage,
+  }));
+}
+
+function createTapRequestFetch(tapApi) {
+  return (url, request = {}) => new Promise((resolve, reject) => {
+    const authorization = request.headers?.Authorization || request.headers?.authorization || "";
+    const secret = String(authorization).replace(/^Bearer\s+/i, "").trim();
+    let data = request.body;
+    try {
+      if (typeof data === "string") {
+        const payload = JSON.parse(data);
+        payload.stream = false;
+        data = JSON.stringify(payload);
+      } else if (data && typeof data === "object") {
+        data = { ...data, stream: false };
+      }
+      tapApi.request({
+        url: String(url),
+        method: request.method || "GET",
+        header: request.headers || {},
+        data,
+        dataType: "json",
+        responseType: "text",
+        timeout: 120000,
+        success(result) {
+          const status = Number(result?.statusCode) || 0;
+          resolve({
+            ok: status >= 200 && status < 300,
+            status,
+            headers: result?.header || {},
+            transport: tapTransport(result, request.diagnosticPhase, [secret]),
+            async json() {
+              if (typeof result?.data === "string") return JSON.parse(result.data);
+              return result?.data;
+            },
+          });
+        },
+        fail(error) {
+          reject(classifyTapRequestFailure(error, request.diagnosticPhase, [secret]));
+        },
+      });
+    } catch (error) {
+      reject(classifyTapRequestFailure(error, request.diagnosticPhase, [secret], "bridge"));
+    }
+  });
+}
+
+function browserTransport(phase, statusCode = 0, stage = "HTTP") {
+  return {
+    channel: "browser.fetch",
+    name: "browser.fetch",
+    phase: String(phase || "provider"),
+    stage,
+    statusCode: Number(statusCode) || 0,
+  };
+}
+
+function createBrowserFetch(fetchImpl) {
+  return async (url, request = {}) => {
+    try {
+      const response = await fetchImpl(url, request);
+      response.transport = browserTransport(request.diagnosticPhase, response.status);
+      return response;
+    } catch (error) {
+      if (error instanceof PlayerAgnesError) throw error;
+      const isTimeout = error?.name === "AbortError" || error?.name === "TimeoutError";
+      throw new PlayerAgnesError(
+        isTimeout ? "provider_uncertain" : "network_unavailable",
+        isTimeout ? 504 : 0,
+        browserTransport(request.diagnosticPhase),
+      );
+    }
+  };
+}
+
+function normalizeTransportPolicy(transportPolicy, requireTapRequest = false) {
+  if (requireTapRequest || transportPolicy === "tap-request") return "tap-request";
+  if (transportPolicy === "browser-fetch") return "browser-fetch";
+  return "auto";
+}
+
+export function getPlayerAgnesTransport({ transportPolicy = "auto", requireTapRequest = false } = {}) {
+  const policy = normalizeTransportPolicy(transportPolicy, requireTapRequest);
+  if (policy === "browser-fetch") {
+    return { name: "browser.fetch", available: typeof globalThis.fetch === "function", policy };
+  }
+  const tapApi = globalThis.tap;
+  if (tapApi && typeof tapApi.request === "function") return { name: "tap.request", available: true, policy };
+  if (policy === "tap-request" || Object.prototype.hasOwnProperty.call(globalThis, "tap")) {
+    return { name: "tap.request", available: false, policy };
+  }
+  return { name: "browser.fetch", available: typeof globalThis.fetch === "function", policy };
+}
+
+function resolvePlayerAgnesFetch(fetchImpl, {
+  transportPolicy = "auto",
+  requireTapRequest = false,
+  diagnosticPhase = "provider",
+} = {}) {
+  const transport = getPlayerAgnesTransport({ transportPolicy, requireTapRequest });
+  if (transport.name === "tap.request") {
+    if (!transport.available) {
+      throw new PlayerAgnesError("network_unavailable", 0, tapTransport(null, diagnosticPhase, [], {
+        stage: "bridge",
+        reason: "bridge-unavailable",
+      }));
+    }
+    return createTapRequestFetch(globalThis.tap);
+  }
+  return createBrowserFetch(fetchImpl);
+}
+
+function classifyResponseStatus(status, transport) {
+  const classified = classifyProviderFailure({ status });
+  return new PlayerAgnesError(classified.code, classified.status, {
+    ...(transport || browserTransport("provider", status)),
+    stage: status === 401 || status === 403 ? "auth" : "HTTP",
+    statusCode: Number(status) || 0,
+  });
+}
+
+async function providerFetch(fetchImpl, key, payload, {
+  phase = "provider",
+  transportPolicy = "auto",
+  requireTapRequest = false,
+} = {}) {
   if (!normalizedKey(key)) throw new PlayerAgnesError("key_required", 0);
   let response;
   try {
-    response = await fetchImpl(AGNES_CHAT_COMPLETIONS_URL, {
+    response = await resolvePlayerAgnesFetch(fetchImpl, { transportPolicy, requireTapRequest, diagnosticPhase: phase })(AGNES_CHAT_COMPLETIONS_URL, {
       method: "POST",
       headers: providerHeaders(key),
       body: JSON.stringify(payload),
       signal: typeof AbortSignal?.timeout === "function" ? AbortSignal.timeout(120000) : undefined,
+      diagnosticPhase: phase,
     });
   } catch (error) {
     if (error instanceof PlayerAgnesError) throw error;
@@ -80,158 +256,106 @@ async function providerFetch(fetchImpl, key, payload) {
     }
     throw new PlayerAgnesError("network_unavailable", 0);
   }
-  if (!response.ok) throw classifyResponseStatus(response.status);
+  if (!response.ok) throw classifyResponseStatus(response.status, response.transport);
   return response;
 }
 
-export async function testPlayerAgnesConnection(fetchImpl, key) {
+export async function testPlayerAgnesConnection(fetchImpl, key, {
+  transportPolicy = "auto",
+  requireTapRequest = false,
+} = {}) {
   const response = await providerFetch(fetchImpl, key, {
     model: AGNES_MODEL,
     messages: [{ role: "user", content: "请只回复一个字：好" }],
     temperature: 0,
     max_tokens: 1,
     stream: false,
-  });
+  }, { phase: "connection-test", transportPolicy, requireTapRequest });
   let body;
   try {
     body = await response.json();
-    const choice = Array.isArray(body?.choices) ? body.choices[0] : null;
-    if (
-      !body ||
-      typeof body !== "object" ||
-      Array.isArray(body) ||
-      body.model !== AGNES_MODEL ||
-      !choice ||
-      !choice.message ||
-      typeof choice.message !== "object" ||
-      choice.message.role !== "assistant"
-    ) {
-      throw new Error("invalid_connection_completion");
-    }
   } catch {
-    throw new PlayerAgnesError("provider_error", response.status || 502);
+    throw new PlayerAgnesError("provider_error", response.status || 502, {
+      ...(response.transport || browserTransport("connection-test", response.status)),
+      stage: "response-parse",
+    });
   }
-  return { connected: true, model: AGNES_MODEL };
-}
-
-function findSseBoundary(buffer) {
-  const match = /\r?\n\r?\n/.exec(buffer);
-  return match ? { index: match.index, length: match[0].length } : null;
-}
-
-async function consumeProviderStream(response, onDelta) {
-  if (!response.body || typeof response.body.getReader !== "function") {
-    throw new PlayerAgnesError("provider_error", response.status || 502);
+  const choice = Array.isArray(body?.choices) ? body.choices[0] : null;
+  if (
+    !body ||
+    typeof body !== "object" ||
+    Array.isArray(body) ||
+    !choice ||
+    !choice.message ||
+    typeof choice.message !== "object" ||
+    choice.message.role !== "assistant"
+  ) {
+    throw new PlayerAgnesError("provider_error", response.status || 502, {
+      ...(response.transport || browserTransport("connection-test", response.status)),
+      stage: "model-contract",
+    });
   }
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let content = "";
-  let isDone = false;
-
-  const consumeFrame = (frame) => {
-    const data = frame
-      .split(/\r?\n/)
-      .filter((line) => line.startsWith("data:"))
-      .map((line) => line.slice(5).trimStart())
-      .join("\n")
-      .trim();
-    if (!data) return;
-    if (data === "[DONE]") {
-      isDone = true;
-      return;
-    }
-    let chunk;
-    try {
-      chunk = JSON.parse(data);
-    } catch {
-      throw new PlayerAgnesError("provider_error", response.status || 502);
-    }
-    if (chunk?.model && chunk.model !== AGNES_MODEL) {
-      throw new PlayerAgnesError("provider_error", response.status || 502);
-    }
-    const choice = Array.isArray(chunk?.choices) ? chunk.choices[0] : null;
-    if (choice?.finish_reason === "length") {
-      throw new PlayerAgnesError("provider_error", response.status || 502);
-    }
-    const delta = typeof choice?.delta?.content === "string" ? choice.delta.content : "";
-    if (!delta) return;
-    content += delta;
-    if (content.length > 24000) throw new PlayerAgnesError("provider_error", response.status || 502);
-    onDelta(delta);
+  return {
+    connected: true,
+    model: typeof body.model === "string" ? body.model : null,
+    transport: response.transport || browserTransport("connection-test", response.status),
   };
-
-  while (!isDone) {
-    let result;
-    try {
-      result = await reader.read();
-    } catch {
-      throw new PlayerAgnesError("network_unavailable", 0);
-    }
-    buffer += decoder.decode(result.value, { stream: !result.done });
-    let boundary = findSseBoundary(buffer);
-    while (boundary) {
-      const frame = buffer.slice(0, boundary.index);
-      buffer = buffer.slice(boundary.index + boundary.length);
-      consumeFrame(frame);
-      if (isDone) break;
-      boundary = findSseBoundary(buffer);
-    }
-    if (result.done) break;
-  }
-  if (!isDone || !content.trim()) throw new PlayerAgnesError("provider_error", response.status || 502);
-  return content;
 }
 
-function snapshotReferences(snapshot) {
-  const player = snapshot.player;
-  return [
-    player.location,
-    player.sect?.name,
-    ...(Array.isArray(player.techniques) ? player.techniques : []),
-    ...(Array.isArray(player.techniqueBuild?.known) ? player.techniqueBuild.known : []),
-    ...(Array.isArray(player.npcs) ? player.npcs.map((npc) => npc?.name) : []),
-    ...(Array.isArray(player.relationships) ? player.relationships.map((entry) => entry?.name) : []),
-    ...(Array.isArray(snapshot.world?.npcs) ? snapshot.world.npcs.map((npc) => npc?.name) : []),
-  ].filter((value) => typeof value === "string" && value.trim());
-}
-
-export async function streamPlayerAgnesEvent(
+export async function streamPlayerAgentTurn(
   fetchImpl,
   key,
   game,
   history,
   action = "",
   onDelta = () => {},
+  { transportPolicy = "auto" } = {},
 ) {
-  const snapshot = sanitizeGameSnapshot(game);
-  const response = await providerFetch(fetchImpl, key, buildAgnesPayload(snapshot, history, action, { stream: true }));
-  const rawContent = await consumeProviderStream(response, onDelta);
+  if (!normalizedKey(key)) throw new PlayerAgnesError("key_required", 0);
   try {
-    return {
-      event: parseAgnesEventWithRecovery(rawContent, {
-        allowedReferences: snapshotReferences(snapshot),
-        deadNpcNames: snapshot.world.npcs.filter((npc) => !npc.alive).map((npc) => npc.name),
+    return await runEventAgentTurn({
+      provider: new AgnesProvider({
+        fetchImpl: resolvePlayerAgnesFetch(fetchImpl, { transportPolicy, diagnosticPhase: "decision" }),
+        apiKey: key,
+        narrativeResponseMode: "json",
       }),
-      rawContent,
-      structured: true,
-      validationReason: null,
-    };
-  } catch {
-    return { event: null, rawContent, structured: false, validationReason: "event_contract_drift" };
+      gameState: game,
+      history,
+      action,
+      onDelta,
+    });
+  } catch (error) {
+    if (error instanceof PlayerAgnesError) throw error;
+    if (error?.code) throw new PlayerAgnesError(error.code, error.status || 0, error.transport);
+    throw new PlayerAgnesError("provider_error", error?.status || 502);
   }
 }
 
-export async function streamPlayerAgnesResolution(fetchImpl, key, game, onDelta = () => {}) {
+export async function streamPlayerAgnesResolution(
+  fetchImpl,
+  key,
+  game,
+  onDelta = () => {},
+  { transportPolicy = "auto" } = {},
+) {
   const pendingResolution = game?.meta?.pendingResolution;
   if (!pendingResolution) throw new PlayerAgnesError("invalid_resolution_state", 400);
   const snapshot = sanitizeGameSnapshot(game);
-  const response = await providerFetch(
-    fetchImpl,
-    key,
-    buildAgnesResolutionPayload(snapshot, pendingResolution, { stream: true }),
-  );
-  const rawContent = await consumeProviderStream(response, onDelta);
+  const payload = buildAgnesResolutionPayload(snapshot, pendingResolution, { stream: false });
+  let rawContent;
+  try {
+    ({ content: rawContent } = await new AgnesProvider({
+      fetchImpl: resolvePlayerAgnesFetch(fetchImpl, { transportPolicy, diagnosticPhase: "resolution" }),
+      apiKey: key,
+      narrativeResponseMode: "json",
+      diagnosticPhase: "resolution",
+    }).streamNarrative({
+      messages: payload.messages,
+      onDelta,
+    }));
+  } catch (error) {
+    throw new PlayerAgnesError(error?.code || "provider_error", error?.status || 502, error?.transport);
+  }
   try {
     return {
       resolution: parseAgnesResolution(rawContent),

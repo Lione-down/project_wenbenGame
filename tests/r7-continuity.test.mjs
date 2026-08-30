@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { buildAgnesPayload, parseAgnesEvent } from "../lib/agnes-contract.mjs";
-import { createNewGame } from "../public/game-engine.mjs";
+import { createNewGame, registerNpcEncounter } from "../public/game-engine.mjs";
 import { sanitizeGameSnapshot } from "../server.mjs";
 
 const profile = {
@@ -28,7 +28,10 @@ const profile = {
 };
 
 function deadNpcState() {
-  const state = createNewGame(profile, 71);
+  const state = registerNpcEncounter(createNewGame(profile, 71), {
+    id: "lin-xuan", name: "林玄", gender: "男", species: "人族",
+    realmIndex: 0, stageIndex: 0, goal: "追查失窃药箱", alive: true,
+  }, { eventId: "red-moon-meeting", summary: "你在红月城与林玄相识。" });
   state.world.npcs[0].alive = false;
   state.world.npcs[0].deathCause = "寿元耗尽";
   state.world.ecologyLog = Array.from({ length: 20 }, (_, index) => ({

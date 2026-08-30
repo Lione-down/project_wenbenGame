@@ -1,0 +1,4 @@
+[
+  { "id": "star-iron", "name": "北天寒星铁", "type": "material", "keywords": ["北境", "寒铁", "炼器"], "summary": "北境冻裂矿脉中的稀有炼器材料。" },
+  { "id": "divine-crystal", "name": "神宇净晶", "type": "material", "keywords": ["神魂", "净化"], "summary": "可用于高阶神魂净化与阵器炼制。" }
+]

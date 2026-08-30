@@ -130,8 +130,8 @@ test("R6 system panels preserve mobile light-theme and touch-target contracts", 
     readFile(new URL("public/styles.css", projectUrl), "utf8"),
   ]);
 
-  assert.match(html, /styles\.css\?v=20260824-r8/);
-  assert.match(html, /app\.mjs\?v=20260824-r8/);
+  assert.match(html, /styles\.css\?v=20260830-p1b/);
+  assert.match(html, /app\.mjs\?v=20260830-p1b/);
   assert.match(css, /\.system-panel\s*\{/);
   assert.match(css, /\.system-grid\s*\{/);
   assert.match(css, /\.system-action[^}]*min-height:\s*44px/s);
